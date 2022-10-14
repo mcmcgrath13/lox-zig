@@ -1,6 +1,5 @@
 const std = @import("std");
 const ArrayList = std.ArrayList;
-const exit = std.process.exit;
 
 const common = @import("common.zig");
 
@@ -27,6 +26,6 @@ pub const ValueArray = struct {
     }
 };
 
-pub fn printValue(value: Value) void {
+pub fn print_value(value: Value) void {
     std.debug.print("'{d}'", .{value});
 }
