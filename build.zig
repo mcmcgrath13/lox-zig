@@ -5,6 +5,7 @@ pub fn build(b: *std.build.Builder) void {
     const mode = b.standardReleaseOptions();
 
     const exe = b.addExecutable("lox", "src/runner.zig");
+    exe.addPackagePath("lox", "src/lox.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
     exe.install();

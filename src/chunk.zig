@@ -6,7 +6,22 @@ const common = @import("common.zig");
 const ValueArray = @import("value.zig").ValueArray;
 const Value = @import("value.zig").Value;
 
-pub const OpCode = enum(u8) { op_return, op_constant, _ };
+pub const OpCode = enum(u8) {
+    op_constant,
+    op_return,
+
+    // unary
+    op_negate,
+
+    // binary
+    op_add,
+    op_divide,
+    op_multiply,
+    op_subtract,
+
+    // fallthrough - allows error handling/default case
+    _,
+};
 
 // this should maybe be ArrayList instead
 pub const Chunk = struct {

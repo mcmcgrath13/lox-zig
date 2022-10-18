@@ -8,6 +8,8 @@ const vlu = @import("value.zig");
 const Value = vlu.Value;
 const print_value = vlu.print_value;
 
+const compile = @import("compile.zig").compile;
+
 const disassemble_instruction = @import("debug.zig").disassemble_instruction;
 
 const STACK_MAX = 256;
@@ -51,10 +53,12 @@ pub const VM = struct {
     pub fn deinit() void { // self: *VM
     }
 
-    pub fn interpret(self: *VM, chunk: *Chunk) InterpretResult {
-        self.chunk = chunk;
-        self.ip = chunk.code.items.ptr;
-        return self.run();
+    pub fn interpret(source: []const u8) InterpretResult {
+        compile(source);
+        return InterpretResult.ok;
+        // self.chunk = chunk;
+        // self.ip = chunk.code.items.ptr;
+        // return self.run();
     }
 
     fn run(self: *VM) InterpretResult {
@@ -76,15 +80,28 @@ pub const VM = struct {
             }
             const instruction = self.read_byte();
             switch (@intToEnum(OpCode, instruction)) {
+                .op_constant => {
+                    const constant = self.read_constant();
+                    self.push(constant);
+                },
                 .op_return => {
                     print_value(self.pop());
                     std.debug.print("\n", .{});
                     return InterpretResult.ok;
                 },
-                .op_constant => {
-                    const constant = self.read_constant();
-                    self.push(constant);
+
+                // unary
+                .op_negate => {
+                    self.push(-1 * self.pop());
                 },
+
+                //binary
+                .op_add => self.binary_op(add),
+                .op_divide => self.binary_op(divide),
+                .op_multiply => self.binary_op(multiply),
+                .op_subtract => self.binary_op(subtract),
+
+                // fallthrough
                 _ => return InterpretResult.compile_error,
             }
         }
@@ -99,4 +116,27 @@ pub const VM = struct {
     fn read_constant(self: *VM) Value {
         return self.chunk.?.constants.values.items[@intCast(usize, self.read_byte())];
     }
+
+    fn binary_op(self: *VM, op: (fn (Value, Value) Value)) void {
+        const right = self.pop();
+        const left = self.pop();
+        self.push(op(left, right));
+    }
 };
+
+// TODO: handle math errors (overflow, div by zero, etc)
+fn add(left: Value, right: Value) Value {
+    return left + right;
+}
+
+fn subtract(left: Value, right: Value) Value {
+    return left - right;
+}
+
+fn multiply(left: Value, right: Value) Value {
+    return left * right;
+}
+
+fn divide(left: Value, right: Value) Value {
+    return left / right;
+}
