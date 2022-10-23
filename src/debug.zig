@@ -25,17 +25,17 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
 
     const instruction_byte = c.code.items[offset];
     return switch (@intToEnum(OpCode, instruction_byte)) {
-        .op_constant => constant_instruction("OP_CONSTANT", c, offset),
-        .op_return => simple_instruction("OP_RETURN", offset),
+        .constant => constant_instruction("CONSTANT", c, offset),
+        ._return => simple_instruction("RETURN", offset),
 
         // unary
-        .op_negate => simple_instruction("OP_NEGATE", offset),
+        .negate => simple_instruction("NEGATE", offset),
 
         // binary
-        .op_add => simple_instruction("OP_ADD", offset),
-        .op_divide => simple_instruction("OP_DIVIDE", offset),
-        .op_multiply => simple_instruction("OP_MULTIPLY", offset),
-        .op_subtract => simple_instruction("OP_SUBTRACT", offset),
+        .add => simple_instruction("ADD", offset),
+        .divide => simple_instruction("DIVIDE", offset),
+        .multiply => simple_instruction("MULTIPLY", offset),
+        .subtract => simple_instruction("SUBTRACT", offset),
 
         // fallthrough
         _ => simple_instruction("UH OHHHHHH", offset),

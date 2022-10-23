@@ -7,17 +7,17 @@ const ValueArray = @import("value.zig").ValueArray;
 const Value = @import("value.zig").Value;
 
 pub const OpCode = enum(u8) {
-    op_constant,
-    op_return,
+    constant,
+    _return,
 
     // unary
-    op_negate,
+    negate,
 
     // binary
-    op_add,
-    op_divide,
-    op_multiply,
-    op_subtract,
+    add,
+    divide,
+    multiply,
+    subtract,
 
     // fallthrough - allows error handling/default case
     _,
@@ -44,8 +44,8 @@ pub const Chunk = struct {
     }
 
     // if we're out of memory, bail out
-    pub fn write(self: *Chunk, byte: anytype, line: usize) void {
-        common.write_or_die(u8, &self.code, @intCast(u8, byte));
+    pub fn write(self: *Chunk, byte: u8, line: usize) void {
+        common.write_or_die(u8, &self.code, byte);
         common.write_or_die(usize, &self.lines, line);
     }
 

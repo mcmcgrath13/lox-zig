@@ -14,10 +14,9 @@ const disassemble_instruction = @import("debug.zig").disassemble_instruction;
 
 const STACK_MAX = 256;
 
-const InterpretResult = enum {
-    ok,
-    compile_error,
-    runtime_error,
+pub const InterpretError = error{
+    compile,
+    runtime,
 };
 
 pub const VM = struct {
@@ -50,18 +49,27 @@ pub const VM = struct {
         return self.stack[self.stack_top];
     }
 
+    fn peek(self: *VM, distance: usize) Value {
+        return self.stack[self.stack_top - 1 - distance];
+    }
+
     pub fn deinit() void { // self: *VM
     }
 
-    pub fn interpret(source: []const u8) InterpretResult {
-        compile(source);
-        return InterpretResult.ok;
-        // self.chunk = chunk;
-        // self.ip = chunk.code.items.ptr;
-        // return self.run();
+    pub fn interpret(self: *VM, allocator: std.mem.Allocator, source: []const u8) InterpretError!void {
+        var chunk = Chunk.init(allocator);
+        defer chunk.deinit();
+
+        compile(source, &chunk, self.debug) catch {
+            return InterpretError.compile;
+        };
+        self.chunk = &chunk;
+        self.ip = chunk.code.items.ptr;
+
+        return self.run();
     }
 
-    fn run(self: *VM) InterpretResult {
+    fn run(self: *VM) InterpretError!void {
         while (true) {
             if (self.debug) {
                 // print stack
@@ -80,29 +88,33 @@ pub const VM = struct {
             }
             const instruction = self.read_byte();
             switch (@intToEnum(OpCode, instruction)) {
-                .op_constant => {
+                .constant => {
                     const constant = self.read_constant();
                     self.push(constant);
                 },
-                .op_return => {
+                ._return => {
                     print_value(self.pop());
                     std.debug.print("\n", .{});
-                    return InterpretResult.ok;
+                    return;
                 },
 
                 // unary
-                .op_negate => {
-                    self.push(-1 * self.pop());
+                .negate => {
+                    if (!self.peek(0).is_number()) {
+                        self.runtime_error(.{"operand must be a number"});
+                        return InterpretError.runtime;
+                    }
+                    self.push(Value.number(-1 * self.pop().as_number()));
                 },
 
                 //binary
-                .op_add => self.binary_op(add),
-                .op_divide => self.binary_op(divide),
-                .op_multiply => self.binary_op(multiply),
-                .op_subtract => self.binary_op(subtract),
+                .add => try self.binary_op(f64, Value.number, add),
+                .divide => try self.binary_op(f64, Value.number, divide),
+                .multiply => try self.binary_op(f64, Value.number, multiply),
+                .subtract => try self.binary_op(f64, Value.number, subtract),
 
                 // fallthrough
-                _ => return InterpretResult.compile_error,
+                _ => return InterpretError.runtime,
             }
         }
     }
@@ -117,26 +129,39 @@ pub const VM = struct {
         return self.chunk.?.constants.values.items[@intCast(usize, self.read_byte())];
     }
 
-    fn binary_op(self: *VM, op: (fn (Value, Value) Value)) void {
-        const right = self.pop();
-        const left = self.pop();
-        self.push(op(left, right));
+    fn binary_op(self: *VM, comptime T: type, value_type: (fn (T) Value), op: (fn (T, T) T)) InterpretError!void {
+        if (!self.peek(0).is_number() or !self.peek(1).is_number()) {
+            self.runtime_error(.{"operands must be numbers"});
+            return InterpretError.runtime;
+        }
+        const right = self.pop().as_number();
+        const left = self.pop().as_number();
+        self.push(value_type(op(left, right)));
+    }
+
+    fn runtime_error(self: *VM, args: anytype) void {
+        std.debug.print("{any}\n", args);
+
+        const instruction: usize = @ptrToInt(self.ip.?) - @ptrToInt(self.chunk.?.code.items.ptr) - 1;
+        const line: usize = self.chunk.?.lines.items[instruction];
+        std.debug.print("[line {d}] in script\n", .{line});
+        self.reset_stack();
     }
 };
 
 // TODO: handle math errors (overflow, div by zero, etc)
-fn add(left: Value, right: Value) Value {
+fn add(left: f64, right: f64) f64 {
     return left + right;
 }
 
-fn subtract(left: Value, right: Value) Value {
+fn subtract(left: f64, right: f64) f64 {
     return left - right;
 }
 
-fn multiply(left: Value, right: Value) Value {
+fn multiply(left: f64, right: f64) f64 {
     return left * right;
 }
 
-fn divide(left: Value, right: Value) Value {
+fn divide(left: f64, right: f64) f64 {
     return left / right;
 }

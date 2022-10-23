@@ -2,7 +2,7 @@
 const std = @import("std");
 
 const lox = @import("lox");
-const InterpretResult = lox.InterpretResult;
+const InterpretError = lox.InterpretError;
 
 pub fn main() anyerror!void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -15,21 +15,18 @@ pub fn main() anyerror!void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    // var vm = lox.VM.init(true);
+    // TODO: put debug bool behind an args flag
+    var vm = lox.VM.init(true);
+    // defer vm.deinit();
 
     switch (args.len) {
-        1 => repl(),
-        2 => run_file(allocator, args[1]),
+        1 => repl(&vm, allocator),
+        2 => run_file(&vm, allocator, args[1]),
         else => {
             std.debug.print("Usage: lox [path]\n", .{});
             std.process.exit(64);
         },
     }
-
-    // defer vm.deinit();
-
-    //
-    // _ = vm.interpret(&c);
 }
 
 fn next_line(reader: anytype, buffer: []u8) ?[]const u8 {
@@ -45,7 +42,7 @@ fn next_line(reader: anytype, buffer: []u8) ?[]const u8 {
     }
 }
 
-fn repl() void {
+fn repl(vm: *lox.VM, allocator: std.mem.Allocator) void {
     const stdout = std.io.getStdOut();
     const stdin = std.io.getStdIn();
 
@@ -58,15 +55,17 @@ fn repl() void {
 
         const input = (next_line(stdin.reader(), &buffer)).?;
 
-        std.debug.print("{s} ({d})", .{ input, input.len });
+        std.debug.print("{s} ({d})\n", .{ input, input.len });
 
         // clear the buffer maybe?
 
-        _ = lox.VM.interpret(input);
+        vm.interpret(allocator, input) catch {
+            std.debug.print("ERROR", .{});
+        };
     }
 }
 
-fn run_file(allocator: std.mem.Allocator, path: []u8) void {
+fn run_file(vm: *lox.VM, allocator: std.mem.Allocator, path: []u8) void {
     const file = std.fs.cwd().openFile(path, .{}) catch {
         std.debug.print("Could not open file", .{});
         std.process.exit(74);
@@ -82,13 +81,14 @@ fn run_file(allocator: std.mem.Allocator, path: []u8) void {
     };
     defer allocator.free(contents);
 
-    const result = lox.VM.interpret(contents);
+    vm.interpret(allocator, contents) catch |e| {
+        switch (e) {
+            InterpretError.compile => std.process.exit(65),
+            InterpretError.runtime => std.process.exit(70),
+        }
+    };
 
-    switch (result) {
-        .ok => std.process.exit(0),
-        .compile_error => std.process.exit(65),
-        .runtime_error => std.process.exit(70),
-    }
+    std.process.exit(0);
 }
 
 // TODO: make this a test, somewhere

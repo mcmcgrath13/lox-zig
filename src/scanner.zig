@@ -189,9 +189,9 @@ pub const Scanner = struct {
         };
     }
 
-    fn error_token(self: *Scanner, message: []const u8) Token {
+    pub fn error_token(self: *Scanner, message: []const u8) Token {
         return Token{
-            .t = TokenType.cf_error,
+            .t = TokenType.scan_error,
             .start = message.ptr,
             .length = message.len,
             .line = self.line,
@@ -258,6 +258,6 @@ pub const TokenType = enum(u8) {
     cf_var,
     cf_while,
 
-    cf_error,
+    scan_error,
     eof,
 };
