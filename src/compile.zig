@@ -52,14 +52,14 @@ const RULES = [_]ParseRule{
     .{ .prefix = null, .infix = Compiler.binary, .precedence = .factor }, // slash,
     .{ .prefix = null, .infix = Compiler.binary, .precedence = .factor }, // star,
     // One or two character tokens.
-    .{ .prefix = null, .infix = null, .precedence = .none }, // bang,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // bang_equal,
+    .{ .prefix = Compiler.unary, .infix = null, .precedence = .none }, // bang,
+    .{ .prefix = null, .infix = Compiler.binary, .precedence = .equality }, // bang_equal,
     .{ .prefix = null, .infix = null, .precedence = .none }, // equal,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // equal_equal,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // greater,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // greater_equal,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // less,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // less_equal,
+    .{ .prefix = null, .infix = Compiler.binary, .precedence = .equality }, // equal_equal,
+    .{ .prefix = null, .infix = Compiler.binary, .precedence = .comparison }, // greater,
+    .{ .prefix = null, .infix = Compiler.binary, .precedence = .comparison }, // greater_equal,
+    .{ .prefix = null, .infix = Compiler.binary, .precedence = .comparison }, // less,
+    .{ .prefix = null, .infix = Compiler.binary, .precedence = .comparison }, // less_equal,
     // Literals.
     .{ .prefix = null, .infix = null, .precedence = .none }, // identifier,
     .{ .prefix = null, .infix = null, .precedence = .none }, // string,
@@ -68,17 +68,17 @@ const RULES = [_]ParseRule{
     .{ .prefix = null, .infix = null, .precedence = .none }, // logical_and,
     .{ .prefix = null, .infix = null, .precedence = .none }, // class,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_else,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // logical_false,
+    .{ .prefix = Compiler.literal, .infix = null, .precedence = .none }, // logical_false,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_for,
     .{ .prefix = null, .infix = null, .precedence = .none }, // fun,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_if,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // nil,
+    .{ .prefix = Compiler.literal, .infix = null, .precedence = .none }, // nil,
     .{ .prefix = null, .infix = null, .precedence = .none }, // logical_or,
     .{ .prefix = null, .infix = null, .precedence = .none }, // print,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_return,
     .{ .prefix = null, .infix = null, .precedence = .none }, // super,
     .{ .prefix = null, .infix = null, .precedence = .none }, // this,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // logical_true,
+    .{ .prefix = Compiler.literal, .infix = null, .precedence = .none }, // logical_true,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_var,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_while,
     //
@@ -146,6 +146,15 @@ pub const Compiler = struct {
         self.emit_constant(Value.number(value));
     }
 
+    fn literal(self: *Compiler) void {
+        switch (self.parser.previous.t) {
+            .logical_false => self.emit_opcode(OpCode._false),
+            .logical_true => self.emit_opcode(OpCode._true),
+            .nil => self.emit_opcode(OpCode.nil),
+            else => unreachable,
+        }
+    }
+
     fn grouping(self: *Compiler) void {
         self.expression();
         self.parser.consume(TokenType.right_paren, "expect ')' after expression");
@@ -157,6 +166,7 @@ pub const Compiler = struct {
         self.parse_precedence(Precedence.unary);
 
         switch (operator_type) {
+            .bang => self.emit_opcode(OpCode.not),
             .minus => self.emit_opcode(OpCode.negate),
             else => return,
         }
@@ -172,6 +182,12 @@ pub const Compiler = struct {
             .minus => self.emit_opcode(OpCode.subtract),
             .star => self.emit_opcode(OpCode.multiply),
             .slash => self.emit_opcode(OpCode.divide),
+            .bang_equal => self.emit_opcodes(.{ OpCode.equal, OpCode.not }),
+            .equal_equal => self.emit_opcode(OpCode.equal),
+            .less => self.emit_opcode(OpCode.less),
+            .less_equal => self.emit_opcodes(.{ OpCode.greater, OpCode.not }),
+            .greater => self.emit_opcode(OpCode.greater),
+            .greater_equal => self.emit_opcodes(.{ OpCode.less, OpCode.not }),
             else => return,
         }
     }
@@ -184,13 +200,15 @@ pub const Compiler = struct {
         self.emit_byte(@enumToInt(op));
     }
 
-    fn emit_simple_instruction(self: *Compiler, op: OpCode, byte: u8) void {
-        self.emit_opcode(op);
-        self.emit_byte(byte);
+    fn emit_opcodes(self: *Compiler, ops: [2]OpCode) void {
+        for (ops) |op| {
+            self.emit_opcode(op);
+        }
     }
 
     fn emit_constant(self: *Compiler, value: Value) void {
-        self.emit_simple_instruction(OpCode.constant, self.make_constant(value));
+        self.emit_opcode(OpCode.constant);
+        self.emit_byte(self.make_constant(value));
     }
 
     fn make_constant(self: *Compiler, value: Value) u8 {

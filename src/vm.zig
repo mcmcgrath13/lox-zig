@@ -87,7 +87,7 @@ pub const VM = struct {
                 _ = disassemble_instruction(self.chunk.?, @ptrToInt(self.ip.?) - @ptrToInt(self.chunk.?.code.items.ptr));
             }
             const instruction = self.read_byte();
-            switch (@intToEnum(OpCode, instruction)) {
+            try switch (@intToEnum(OpCode, instruction)) {
                 .constant => {
                     const constant = self.read_constant();
                     self.push(constant);
@@ -98,7 +98,13 @@ pub const VM = struct {
                     return;
                 },
 
+                // literals
+                .nil => self.push(Value.nil()),
+                ._true => self.push(Value.boolean(true)),
+                ._false => self.push(Value.boolean(false)),
+
                 // unary
+                .not => self.push(Value.boolean(self.pop().is_falsey())),
                 .negate => {
                     if (!self.peek(0).is_number()) {
                         self.runtime_error(.{"operand must be a number"});
@@ -112,10 +118,17 @@ pub const VM = struct {
                 .divide => try self.binary_op(f64, Value.number, divide),
                 .multiply => try self.binary_op(f64, Value.number, multiply),
                 .subtract => try self.binary_op(f64, Value.number, subtract),
+                .equal => {
+                    const right: Value = self.pop();
+                    const left: Value = self.pop();
+                    self.push(Value.boolean(left.equals(right)));
+                },
+                .less => self.binary_op(bool, Value.boolean, less),
+                .greater => self.binary_op(bool, Value.boolean, greater),
 
                 // fallthrough
                 _ => return InterpretError.runtime,
-            }
+            };
         }
     }
 
@@ -129,7 +142,7 @@ pub const VM = struct {
         return self.chunk.?.constants.values.items[@intCast(usize, self.read_byte())];
     }
 
-    fn binary_op(self: *VM, comptime T: type, value_type: (fn (T) Value), op: (fn (T, T) T)) InterpretError!void {
+    fn binary_op(self: *VM, comptime R: type, value_type: (fn (R) Value), op: (fn (f64, f64) R)) InterpretError!void {
         if (!self.peek(0).is_number() or !self.peek(1).is_number()) {
             self.runtime_error(.{"operands must be numbers"});
             return InterpretError.runtime;
@@ -164,4 +177,12 @@ fn multiply(left: f64, right: f64) f64 {
 
 fn divide(left: f64, right: f64) f64 {
     return left / right;
+}
+
+fn less(left: f64, right: f64) bool {
+    return left < right;
+}
+
+fn greater(left: f64, right: f64) bool {
+    return left > right;
 }

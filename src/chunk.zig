@@ -10,14 +10,23 @@ pub const OpCode = enum(u8) {
     constant,
     _return,
 
+    // literals
+    nil,
+    _true,
+    _false,
+
     // unary
     negate,
+    not,
 
     // binary
     add,
     divide,
     multiply,
     subtract,
+    equal,
+    less,
+    greater,
 
     // fallthrough - allows error handling/default case
     _,

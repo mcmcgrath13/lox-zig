@@ -28,7 +28,13 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         .constant => constant_instruction("CONSTANT", c, offset),
         ._return => simple_instruction("RETURN", offset),
 
+        // literals
+        .nil => simple_instruction("NIL", offset),
+        ._false => simple_instruction("FALSE", offset),
+        ._true => simple_instruction("TRUE", offset),
+
         // unary
+        .not => simple_instruction("NOT", offset),
         .negate => simple_instruction("NEGATE", offset),
 
         // binary
@@ -36,6 +42,9 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         .divide => simple_instruction("DIVIDE", offset),
         .multiply => simple_instruction("MULTIPLY", offset),
         .subtract => simple_instruction("SUBTRACT", offset),
+        .equal => simple_instruction("EQUAL", offset),
+        .less => simple_instruction("LESS", offset),
+        .greater => simple_instruction("GREATER", offset),
 
         // fallthrough
         _ => simple_instruction("UH OHHHHHH", offset),

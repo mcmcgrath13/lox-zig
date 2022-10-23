@@ -4,7 +4,7 @@ const ArrayList = std.ArrayList;
 const common = @import("common.zig");
 
 pub const Value = union(enum) {
-    val_bool: bool,
+    val_boolean: bool,
     val_nil: void,
     val_number: f64,
 
@@ -13,7 +13,7 @@ pub const Value = union(enum) {
     }
 
     pub fn boolean(val: bool) Value {
-        return Value{ .val_bool = val };
+        return Value{ .val_boolean = val };
     }
 
     pub fn nil() Value {
@@ -27,9 +27,9 @@ pub const Value = union(enum) {
         };
     }
 
-    pub fn as_bool(self: Value) bool {
+    pub fn as_boolean(self: Value) bool {
         return switch (self) {
-            .val_bool => self.val_bool,
+            .val_boolean => self.val_boolean,
             else => unreachable,
         };
     }
@@ -41,9 +41,9 @@ pub const Value = union(enum) {
         };
     }
 
-    pub fn is_bool(self: Value) bool {
+    pub fn is_boolean(self: Value) bool {
         return switch (self) {
-            .val_bool => true,
+            .val_boolean => true,
             else => false,
         };
     }
@@ -53,6 +53,33 @@ pub const Value = union(enum) {
             .val_nil => true,
             else => false,
         };
+    }
+
+    pub fn is_falsey(self: Value) bool {
+        return self.is_nil() or (self.is_boolean() and !self.as_boolean());
+    }
+
+    pub fn equals(self: Value, other: Value) bool {
+        switch (self) {
+            .val_nil => {
+                switch (other) {
+                    .val_nil => return true,
+                    else => return false,
+                }
+            },
+            .val_boolean => {
+                switch (other) {
+                    .val_boolean => return self.as_boolean() == other.as_boolean(),
+                    else => return false,
+                }
+            },
+            .val_number => {
+                switch (other) {
+                    .val_number => return self.as_number() == other.as_number(),
+                    else => return false,
+                }
+            },
+        }
     }
 };
 
@@ -79,7 +106,7 @@ pub const ValueArray = struct {
 
 pub fn print_value(value: Value) void {
     switch (value) {
-        .val_bool => std.debug.print("'{any}'", .{value.as_bool()}),
+        .val_boolean => std.debug.print("'{any}'", .{value.as_boolean()}),
         .val_nil => std.debug.print("'nil'", .{}),
         .val_number => std.debug.print("'{d}'", .{value.as_number()}),
     }
