@@ -24,7 +24,11 @@ pub const Value = union(enum) {
         return Value.val_nil;
     }
 
-    pub fn obj(val: *Obj) Value {
+    pub fn obj(val: *Obj, tail: *?*Obj) Value {
+        if (tail.*) |o| {
+            val.next = o;
+        }
+        tail.* = val;
         return Value{ .val_obj = val };
     }
 

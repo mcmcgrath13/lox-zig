@@ -9,9 +9,12 @@ pub const ObjType = union(enum) {
         return ObjType{ .string = obj };
     }
 
-    pub fn deinit(self: *ObjType) void {
+    pub fn deinit(self: *ObjType, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .string => self.string.deinit(),
+            .string => {
+                self.string.deinit(allocator);
+                allocator.destroy(self.string);
+            },
         }
     }
 };
@@ -24,8 +27,8 @@ pub const Obj = struct {
         return Obj{ .t = t };
     }
 
-    pub fn deinit(self: *Obj) void {
-        self.t.deinit();
+    pub fn deinit(self: *Obj, allocator: std.mem.Allocator) void {
+        self.t.deinit(allocator);
     }
 
     pub fn as_string(self: *Obj) []const u8 {
@@ -37,23 +40,19 @@ pub const Obj = struct {
 
 pub const ObjString = struct {
     data: []const u8,
-    allocator: std.mem.Allocator,
 
     pub fn init(string: []const u8, allocator: std.mem.Allocator) ObjString {
-        const data = allocator.alloc(u8, string.len) catch {
-            std.debug.print("Out of memory\n", .{});
-            std.process.exit(1);
-        };
+        const data = common.alloc_or_die(allocator, u8, string.len);
         std.mem.copy(u8, data, string);
-        return ObjString{ .data = data, .allocator = allocator };
+        return ObjString{ .data = data };
     }
 
-    pub fn take(data: []const u8, allocator: std.mem.Allocator) ObjString {
-        return ObjString{ .data = data, .allocator = allocator };
+    pub fn take(data: []const u8) ObjString {
+        return ObjString{ .data = data };
     }
 
-    pub fn deinit(self: *ObjString) void {
-        self.allocator.free(self.data);
+    pub fn deinit(self: *ObjString, allocator: std.mem.Allocator) void {
+        allocator.free(self.data);
     }
 };
 
@@ -74,7 +73,7 @@ pub fn alloc_string(string: []const u8, allocator: std.mem.Allocator) *Obj {
 
 pub fn take_string(data: []const u8, allocator: std.mem.Allocator) *Obj {
     var objstr = common.create_or_die(allocator, ObjString);
-    objstr.* = ObjString.take(data, allocator);
+    objstr.* = ObjString.take(data);
 
     var objt = ObjType.string(objstr);
 

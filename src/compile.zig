@@ -14,6 +14,7 @@ const disassemble_chunk = @import("debug.zig").disassemble_chunk;
 const Value = @import("value.zig").Value;
 
 const obj = @import("object.zig");
+const Obj = obj.Obj;
 const alloc_string = obj.alloc_string;
 
 const compile_err = error.CompileFailed;
@@ -93,7 +94,13 @@ fn get_rule(t: TokenType) *const ParseRule {
     return &RULES[@intCast(usize, @enumToInt(t))];
 }
 
-pub fn compile(source: []const u8, chunk: *Chunk, allocator: std.mem.Allocator, debug: bool) !void {
+pub fn compile(
+    source: []const u8,
+    chunk: *Chunk,
+    allocator: std.mem.Allocator,
+    debug: bool,
+    objects: ?*Obj,
+) !?*Obj {
     var scanner = Scanner.init(source);
     var parser = Parser.init(&scanner);
     parser.advance();
@@ -103,6 +110,7 @@ pub fn compile(source: []const u8, chunk: *Chunk, allocator: std.mem.Allocator, 
         .parser = &parser,
         .allocator = allocator,
         .debug = debug,
+        .objects = objects,
     };
 
     return compiler.compile();
@@ -113,13 +121,16 @@ pub const Compiler = struct {
     parser: *Parser,
     allocator: std.mem.Allocator,
     debug: bool,
+    objects: ?*Obj,
 
-    pub fn compile(self: *Compiler) !void {
+    pub fn compile(self: *Compiler) !?*Obj {
         self.expression();
         self.parser.consume(TokenType.eof, "expected end of expression");
         self.end();
 
         if (self.parser.had_error) return compile_err;
+
+        return self.objects;
     }
 
     fn parse_precedence(self: *Compiler, precedence: Precedence) void {
@@ -153,7 +164,7 @@ pub const Compiler = struct {
 
     fn string(self: *Compiler) void {
         var object = alloc_string(self.parser.previous.start[1 .. self.parser.previous.length - 1], self.allocator);
-        self.emit_constant(Value.obj(object));
+        self.emit_constant(Value.obj(object, &self.objects));
     }
 
     fn literal(self: *Compiler) void {

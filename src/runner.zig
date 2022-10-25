@@ -24,7 +24,7 @@ pub fn main() anyerror!void {
     defer vm.deinit();
 
     switch (args.len) {
-        1 => repl(&vm, allocator),
+        1 => repl(&vm),
         2 => run_file(&vm, allocator, args[1]),
         else => {
             std.debug.print("Usage: lox [path]\n", .{});
@@ -46,7 +46,7 @@ fn next_line(reader: anytype, buffer: []u8) ?[]const u8 {
     }
 }
 
-fn repl(vm: *lox.VM, allocator: std.mem.Allocator) void {
+fn repl(vm: *lox.VM) void {
     const stdout = std.io.getStdOut();
     const stdin = std.io.getStdIn();
 
@@ -57,13 +57,17 @@ fn repl(vm: *lox.VM, allocator: std.mem.Allocator) void {
             std.debug.print("couldn't write", .{});
         };
 
-        const input = (next_line(stdin.reader(), &buffer)).?;
+        // break if no input is passed (ctrl+d)
+        const input = (next_line(stdin.reader(), &buffer)) orelse {
+            std.debug.print("\n", .{});
+            break;
+        };
 
         std.debug.print("{s} ({d})\n", .{ input, input.len });
 
         // clear the buffer maybe?
 
-        vm.interpret(allocator, input) catch {
+        vm.interpret(input) catch {
             std.debug.print("ERROR", .{});
         };
     }
@@ -85,14 +89,12 @@ fn run_file(vm: *lox.VM, allocator: std.mem.Allocator, path: []u8) void {
     };
     defer allocator.free(contents);
 
-    vm.interpret(allocator, contents) catch |e| {
+    vm.interpret(contents) catch |e| {
         switch (e) {
             InterpretError.compile => std.process.exit(65),
             InterpretError.runtime => std.process.exit(70),
         }
     };
-
-    std.process.exit(0);
 }
 
 // TODO: make this a test, somewhere

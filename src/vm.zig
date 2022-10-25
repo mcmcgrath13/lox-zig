@@ -36,7 +36,7 @@ pub const VM = struct {
 
     debug: bool = false,
 
-    pub fn init(debug: bool, allocator: std.mem.Allocator) VM { //
+    pub fn init(debug: bool, allocator: std.mem.Allocator) VM {
         return VM{
             .debug = debug,
             .allocator = allocator,
@@ -49,9 +49,10 @@ pub const VM = struct {
 
     pub fn free_objects(self: *VM) void {
         var object: ?*Obj = self.objects;
-        while (object != null) {
-            const next: ?*Obj = object.?.next;
-            object.?.deinit();
+        while (object) |o| {
+            const next: ?*Obj = o.next;
+            o.deinit(self.allocator);
+            self.allocator.destroy(o);
             object = next;
         }
     }
@@ -74,11 +75,11 @@ pub const VM = struct {
         return self.stack[self.stack_top - 1 - distance];
     }
 
-    pub fn interpret(self: *VM, allocator: std.mem.Allocator, source: []const u8) InterpretError!void {
-        var chunk = Chunk.init(allocator);
+    pub fn interpret(self: *VM, source: []const u8) InterpretError!void {
+        var chunk = Chunk.init(self.allocator);
         defer chunk.deinit();
 
-        compile(source, &chunk, self.allocator, self.debug) catch {
+        self.objects = compile(source, &chunk, self.allocator, self.debug, self.objects) catch {
             return InterpretError.compile;
         };
         self.chunk = &chunk;
@@ -167,7 +168,12 @@ pub const VM = struct {
         return self.chunk.?.constants.values.items[@intCast(usize, self.read_byte())];
     }
 
-    fn binary_op(self: *VM, comptime R: type, value_type: (fn (R) Value), op: (fn (f64, f64) R)) InterpretError!void {
+    fn binary_op(
+        self: *VM,
+        comptime R: type,
+        value_type: (fn (R) Value),
+        op: (fn (f64, f64) R),
+    ) InterpretError!void {
         if (!self.peek(0).is_number() or !self.peek(1).is_number()) {
             self.runtime_error(.{"operands must be numbers"});
             return InterpretError.runtime;
@@ -184,11 +190,11 @@ pub const VM = struct {
             self.runtime_error(.{"out of memory"});
             return InterpretError.runtime;
         };
-        self.push(Value.obj(take_string(data, self.allocator)));
+        self.push(Value.obj(take_string(data, self.allocator), &self.objects));
     }
 
     fn runtime_error(self: *VM, args: anytype) void {
-        std.debug.print("{any}\n", args);
+        std.debug.print("{s}\n", args);
 
         const instruction: usize = @ptrToInt(self.ip.?) - @ptrToInt(self.chunk.?.code.items.ptr) - 1;
         const line: usize = self.chunk.?.lines.items[instruction];
