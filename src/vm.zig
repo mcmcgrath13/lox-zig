@@ -184,7 +184,7 @@ pub const VM = struct {
             self.runtime_error(.{"out of memory"});
             return InterpretError.runtime;
         };
-        self.push(Value.obj(&take_string(data, self.allocator)));
+        self.push(Value.obj(take_string(data, self.allocator)));
     }
 
     fn runtime_error(self: *VM, args: anytype) void {

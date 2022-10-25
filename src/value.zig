@@ -129,7 +129,8 @@ pub const ValueArray = struct {
     values: ArrayList(Value),
 
     pub fn init(allocator: std.mem.Allocator) ValueArray {
-        return ValueArray{ .values = ArrayList(Value).init(allocator) };
+        var arr = ArrayList(Value).init(allocator);
+        return ValueArray{ .values = arr };
     }
 
     pub fn deinit(self: *ValueArray) void {

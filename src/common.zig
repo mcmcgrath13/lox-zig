@@ -8,3 +8,17 @@ pub fn write_or_die(comptime T: type, list: *ArrayList(T), value: T) void {
         exit(1);
     };
 }
+
+pub fn alloc_or_die(allocator: std.mem.Allocator, comptime T: type, len: usize) []T {
+    return allocator.alloc(T, len) catch {
+        std.debug.print("Out of memory\n", .{});
+        std.process.exit(1);
+    };
+}
+
+pub fn create_or_die(allocator: std.mem.Allocator, comptime T: type) *T {
+    return allocator.create(T) catch {
+        std.debug.print("Out of memory\n", .{});
+        std.process.exit(1);
+    };
+}

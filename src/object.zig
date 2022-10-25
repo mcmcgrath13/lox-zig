@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const common = @import("common.zig");
+
 pub const ObjType = union(enum) {
     string: *ObjString,
 
@@ -55,16 +57,32 @@ pub const ObjString = struct {
     }
 };
 
-pub fn alloc_string(string: []const u8, allocator: std.mem.Allocator) Obj {
-    return Obj.init(ObjType.string(&ObjString.init(string, allocator)));
+pub fn alloc_obj(objt: ObjType, allocator: std.mem.Allocator) *Obj {
+    var obj = common.create_or_die(allocator, Obj);
+    obj.* = Obj.init(objt);
+    return obj;
 }
 
-pub fn take_string(data: []const u8, allocator: std.mem.Allocator) Obj {
-    return Obj.init(ObjType.string(&ObjString.take(data, allocator)));
+pub fn alloc_string(string: []const u8, allocator: std.mem.Allocator) *Obj {
+    var objstr = common.create_or_die(allocator, ObjString);
+    objstr.* = ObjString.init(string, allocator);
+
+    var objt = ObjType.string(objstr);
+
+    return alloc_obj(objt, allocator);
+}
+
+pub fn take_string(data: []const u8, allocator: std.mem.Allocator) *Obj {
+    var objstr = common.create_or_die(allocator, ObjString);
+    objstr.* = ObjString.take(data, allocator);
+
+    var objt = ObjType.string(objstr);
+
+    return alloc_obj(objt, allocator);
 }
 
 pub fn print_obj(obj: *Obj) void {
     switch (obj.t) {
-        .string => std.debug.print("'{any}'", .{obj.t.string.data}),
+        .string => std.debug.print("'{s}'", .{obj.t.string.data}),
     }
 }

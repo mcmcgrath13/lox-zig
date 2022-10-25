@@ -8,7 +8,7 @@ pub fn main() anyerror!void {
     var gpa = std.heap.GeneralPurposeAllocator(.{
         .retain_metadata = true,
         .never_unmap = true,
-        .verbose_log = true,
+        // .verbose_log = true,
     }){};
     const allocator = gpa.allocator();
     defer {

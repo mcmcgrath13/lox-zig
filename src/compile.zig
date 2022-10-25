@@ -153,7 +153,7 @@ pub const Compiler = struct {
 
     fn string(self: *Compiler) void {
         var object = alloc_string(self.parser.previous.start[1 .. self.parser.previous.length - 1], self.allocator);
-        self.emit_constant(Value.obj(&object));
+        self.emit_constant(Value.obj(object));
     }
 
     fn literal(self: *Compiler) void {
