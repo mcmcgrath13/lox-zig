@@ -12,6 +12,10 @@ const compile = @import("compile.zig").compile;
 
 const disassemble_instruction = @import("debug.zig").disassemble_instruction;
 
+const obj = @import("object.zig");
+const Obj = obj.Obj;
+const take_string = obj.take_string;
+
 const STACK_MAX = 256;
 
 pub const InterpretError = error{
@@ -22,17 +26,34 @@ pub const InterpretError = error{
 pub const VM = struct {
     chunk: ?*Chunk = null,
     ip: ?[*]u8 = null,
+    allocator: std.mem.Allocator,
 
     // TODO: revisit if this should really use pointer math
     stack: [STACK_MAX]Value = undefined,
     stack_top: usize = 0,
 
+    objects: ?*Obj = null,
+
     debug: bool = false,
 
-    pub fn init(debug: bool) VM { //allocator: std.mem.Allocator
+    pub fn init(debug: bool, allocator: std.mem.Allocator) VM { //
         return VM{
             .debug = debug,
+            .allocator = allocator,
         };
+    }
+
+    pub fn deinit(self: *VM) void {
+        self.free_objects();
+    }
+
+    pub fn free_objects(self: *VM) void {
+        var object: ?*Obj = self.objects;
+        while (object != null) {
+            const next: ?*Obj = object.?.next;
+            object.?.deinit();
+            object = next;
+        }
     }
 
     fn reset_stack(self: *VM) void {
@@ -53,14 +74,11 @@ pub const VM = struct {
         return self.stack[self.stack_top - 1 - distance];
     }
 
-    pub fn deinit() void { // self: *VM
-    }
-
     pub fn interpret(self: *VM, allocator: std.mem.Allocator, source: []const u8) InterpretError!void {
         var chunk = Chunk.init(allocator);
         defer chunk.deinit();
 
-        compile(source, &chunk, self.debug) catch {
+        compile(source, &chunk, self.allocator, self.debug) catch {
             return InterpretError.compile;
         };
         self.chunk = &chunk;
@@ -114,7 +132,14 @@ pub const VM = struct {
                 },
 
                 //binary
-                .add => try self.binary_op(f64, Value.number, add),
+                .add => {
+                    if (self.peek(0).is_string() and self.peek(1).is_string()) {
+                        try self.concatenate();
+                    } else {
+                        // TODO: fix error message
+                        try self.binary_op(f64, Value.number, add);
+                    }
+                },
                 .divide => try self.binary_op(f64, Value.number, divide),
                 .multiply => try self.binary_op(f64, Value.number, multiply),
                 .subtract => try self.binary_op(f64, Value.number, subtract),
@@ -150,6 +175,16 @@ pub const VM = struct {
         const right = self.pop().as_number();
         const left = self.pop().as_number();
         self.push(value_type(op(left, right)));
+    }
+
+    fn concatenate(self: *VM) InterpretError!void {
+        const b: []const u8 = self.pop().as_obj().as_string();
+        const a: []const u8 = self.pop().as_obj().as_string();
+        const data = std.mem.concat(self.allocator, u8, &[_][]const u8{ a, b }) catch {
+            self.runtime_error(.{"out of memory"});
+            return InterpretError.runtime;
+        };
+        self.push(Value.obj(&take_string(data, self.allocator)));
     }
 
     fn runtime_error(self: *VM, args: anytype) void {

@@ -13,6 +13,9 @@ const disassemble_chunk = @import("debug.zig").disassemble_chunk;
 
 const Value = @import("value.zig").Value;
 
+const obj = @import("object.zig");
+const alloc_string = obj.alloc_string;
+
 const compile_err = error.CompileFailed;
 
 const Precedence = enum(u8) {
@@ -62,7 +65,7 @@ const RULES = [_]ParseRule{
     .{ .prefix = null, .infix = Compiler.binary, .precedence = .comparison }, // less_equal,
     // Literals.
     .{ .prefix = null, .infix = null, .precedence = .none }, // identifier,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // string,
+    .{ .prefix = Compiler.string, .infix = null, .precedence = .none }, // string,
     .{ .prefix = Compiler.number, .infix = null, .precedence = .none }, // number,
     // Keywords.
     .{ .prefix = null, .infix = null, .precedence = .none }, // logical_and,
@@ -90,7 +93,7 @@ fn get_rule(t: TokenType) *const ParseRule {
     return &RULES[@intCast(usize, @enumToInt(t))];
 }
 
-pub fn compile(source: []const u8, chunk: *Chunk, debug: bool) !void {
+pub fn compile(source: []const u8, chunk: *Chunk, allocator: std.mem.Allocator, debug: bool) !void {
     var scanner = Scanner.init(source);
     var parser = Parser.init(&scanner);
     parser.advance();
@@ -98,6 +101,7 @@ pub fn compile(source: []const u8, chunk: *Chunk, debug: bool) !void {
     var compiler = Compiler{
         .current_chunk = chunk,
         .parser = &parser,
+        .allocator = allocator,
         .debug = debug,
     };
 
@@ -107,6 +111,7 @@ pub fn compile(source: []const u8, chunk: *Chunk, debug: bool) !void {
 pub const Compiler = struct {
     current_chunk: *Chunk,
     parser: *Parser,
+    allocator: std.mem.Allocator,
     debug: bool,
 
     pub fn compile(self: *Compiler) !void {
@@ -144,6 +149,11 @@ pub const Compiler = struct {
         // TODO: error handling
         const value = std.fmt.parseFloat(f64, self.parser.previous.start[0..self.parser.previous.length]) catch 0;
         self.emit_constant(Value.number(value));
+    }
+
+    fn string(self: *Compiler) void {
+        var object = alloc_string(self.parser.previous.start[1 .. self.parser.previous.length - 1], self.allocator);
+        self.emit_constant(Value.obj(&object));
     }
 
     fn literal(self: *Compiler) void {

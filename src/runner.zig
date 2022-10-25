@@ -5,7 +5,11 @@ const lox = @import("lox");
 const InterpretError = lox.InterpretError;
 
 pub fn main() anyerror!void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{
+        .retain_metadata = true,
+        .never_unmap = true,
+        .verbose_log = true,
+    }){};
     const allocator = gpa.allocator();
     defer {
         const leaked = gpa.deinit();
@@ -16,8 +20,8 @@ pub fn main() anyerror!void {
     defer std.process.argsFree(allocator, args);
 
     // TODO: put debug bool behind an args flag
-    var vm = lox.VM.init(true);
-    // defer vm.deinit();
+    var vm = lox.VM.init(true, allocator);
+    defer vm.deinit();
 
     switch (args.len) {
         1 => repl(&vm, allocator),
