@@ -118,9 +118,7 @@ pub const Value = union(enum) {
             .val_obj => {
                 switch (other) {
                     .val_obj => {
-                        const a = self.as_obj().as_string();
-                        const b = other.as_obj().as_string();
-                        return std.mem.eql(u8, a, b);
+                        return self.as_obj().equals(other.as_obj());
                     },
                     else => return false,
                 }

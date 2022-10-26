@@ -1,4 +1,5 @@
 const std = @import("std");
+const HashMap = std.HashMap;
 
 const chnk = @import("chunk.zig");
 const Chunk = chnk.Chunk;
@@ -15,8 +16,17 @@ const disassemble_instruction = @import("debug.zig").disassemble_instruction;
 const obj = @import("object.zig");
 const Obj = obj.Obj;
 const take_string = obj.take_string;
+const ObjString = obj.ObjString;
+const ObjStringContext = obj.ObjStringContext;
 
 const STACK_MAX = 256;
+
+pub const ObjStringHashMap = HashMap(
+    *ObjString,
+    void,
+    ObjStringContext,
+    std.hash_map.default_max_load_percentage,
+);
 
 pub const InterpretError = error{
     compile,
@@ -33,18 +43,22 @@ pub const VM = struct {
     stack_top: usize = 0,
 
     objects: ?*Obj = null,
+    strings: ObjStringHashMap,
 
     debug: bool = false,
 
     pub fn init(debug: bool, allocator: std.mem.Allocator) VM {
+        const strings = ObjStringHashMap.init(allocator);
         return VM{
             .debug = debug,
             .allocator = allocator,
+            .strings = strings,
         };
     }
 
     pub fn deinit(self: *VM) void {
         self.free_objects();
+        self.strings.deinit();
     }
 
     pub fn free_objects(self: *VM) void {
@@ -79,7 +93,14 @@ pub const VM = struct {
         var chunk = Chunk.init(self.allocator);
         defer chunk.deinit();
 
-        self.objects = compile(source, &chunk, self.allocator, self.debug, self.objects) catch {
+        self.objects = compile(
+            source,
+            &chunk,
+            self.allocator,
+            self.debug,
+            self.objects,
+            &self.strings,
+        ) catch {
             return InterpretError.compile;
         };
         self.chunk = &chunk;
@@ -190,7 +211,7 @@ pub const VM = struct {
             self.runtime_error(.{"out of memory"});
             return InterpretError.runtime;
         };
-        self.push(Value.obj(take_string(data, self.allocator), &self.objects));
+        self.push(Value.obj(take_string(&self.strings, data, self.allocator), &self.objects));
     }
 
     fn runtime_error(self: *VM, args: anytype) void {

@@ -17,6 +17,8 @@ const obj = @import("object.zig");
 const Obj = obj.Obj;
 const alloc_string = obj.alloc_string;
 
+const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
+
 const compile_err = error.CompileFailed;
 
 const Precedence = enum(u8) {
@@ -100,6 +102,7 @@ pub fn compile(
     allocator: std.mem.Allocator,
     debug: bool,
     objects: ?*Obj,
+    strings: *ObjStringHashMap,
 ) !?*Obj {
     var scanner = Scanner.init(source);
     var parser = Parser.init(&scanner);
@@ -111,6 +114,7 @@ pub fn compile(
         .allocator = allocator,
         .debug = debug,
         .objects = objects,
+        .strings = strings,
     };
 
     return compiler.compile();
@@ -122,6 +126,7 @@ pub const Compiler = struct {
     allocator: std.mem.Allocator,
     debug: bool,
     objects: ?*Obj,
+    strings: *ObjStringHashMap,
 
     pub fn compile(self: *Compiler) !?*Obj {
         self.expression();
@@ -158,12 +163,19 @@ pub const Compiler = struct {
 
     fn number(self: *Compiler) void {
         // TODO: error handling
-        const value = std.fmt.parseFloat(f64, self.parser.previous.start[0..self.parser.previous.length]) catch 0;
+        const value = std.fmt.parseFloat(
+            f64,
+            self.parser.previous.start[0..self.parser.previous.length],
+        ) catch 0;
         self.emit_constant(Value.number(value));
     }
 
     fn string(self: *Compiler) void {
-        var object = alloc_string(self.parser.previous.start[1 .. self.parser.previous.length - 1], self.allocator);
+        var object = alloc_string(
+            self.strings,
+            self.parser.previous.start[1 .. self.parser.previous.length - 1],
+            self.allocator,
+        );
         self.emit_constant(Value.obj(object, &self.objects));
     }
 
