@@ -2,11 +2,15 @@ const std = @import("std");
 const ArrayList = std.ArrayList;
 
 const common = @import("common.zig");
+const obj = @import("object.zig");
+const Obj = obj.Obj;
+const print_obj = obj.print_obj;
 
 pub const Value = union(enum) {
     val_boolean: bool,
     val_nil: void,
     val_number: f64,
+    val_obj: *Obj,
 
     pub fn number(val: f64) Value {
         return Value{ .val_number = val };
@@ -20,6 +24,14 @@ pub const Value = union(enum) {
         return Value.val_nil;
     }
 
+    pub fn obj(val: *Obj, tail: *?*Obj) Value {
+        if (tail.*) |o| {
+            val.next = o;
+        }
+        tail.* = val;
+        return Value{ .val_obj = val };
+    }
+
     pub fn as_number(self: Value) f64 {
         return switch (self) {
             .val_number => self.val_number,
@@ -30,6 +42,13 @@ pub const Value = union(enum) {
     pub fn as_boolean(self: Value) bool {
         return switch (self) {
             .val_boolean => self.val_boolean,
+            else => unreachable,
+        };
+    }
+
+    pub fn as_obj(self: Value) *Obj {
+        return switch (self) {
+            .val_obj => self.val_obj,
             else => unreachable,
         };
     }
@@ -51,6 +70,23 @@ pub const Value = union(enum) {
     pub fn is_nil(self: Value) bool {
         return switch (self) {
             .val_nil => true,
+            else => false,
+        };
+    }
+
+    pub fn is_obj(self: Value) bool {
+        return switch (self) {
+            .val_obj => true,
+            else => false,
+        };
+    }
+
+    pub fn is_string(self: Value) bool {
+        return switch (self) {
+            .val_obj => switch (self.val_obj.t) {
+                .string => true,
+                // else => false,
+            },
             else => false,
         };
     }
@@ -79,6 +115,14 @@ pub const Value = union(enum) {
                     else => return false,
                 }
             },
+            .val_obj => {
+                switch (other) {
+                    .val_obj => {
+                        return self.as_obj().equals(other.as_obj());
+                    },
+                    else => return false,
+                }
+            },
         }
     }
 };
@@ -87,7 +131,8 @@ pub const ValueArray = struct {
     values: ArrayList(Value),
 
     pub fn init(allocator: std.mem.Allocator) ValueArray {
-        return ValueArray{ .values = ArrayList(Value).init(allocator) };
+        var arr = ArrayList(Value).init(allocator);
+        return ValueArray{ .values = arr };
     }
 
     pub fn deinit(self: *ValueArray) void {
@@ -109,5 +154,6 @@ pub fn print_value(value: Value) void {
         .val_boolean => std.debug.print("'{any}'", .{value.as_boolean()}),
         .val_nil => std.debug.print("'nil'", .{}),
         .val_number => std.debug.print("'{d}'", .{value.as_number()}),
+        .val_obj => print_obj(value.as_obj()),
     }
 }

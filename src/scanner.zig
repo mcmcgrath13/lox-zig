@@ -8,7 +8,7 @@ pub const Scanner = struct {
     end: [*]const u8,
 
     pub fn init(source: []const u8) Scanner {
-        return Scanner{ .start = source.ptr, .current = source.ptr, .end = source.ptr + source.len + 1 };
+        return Scanner{ .start = source.ptr, .current = source.ptr, .end = source.ptr + source.len };
     }
 
     pub fn scan_token(self: *Scanner) Token {
@@ -46,7 +46,7 @@ pub const Scanner = struct {
     }
 
     fn is_at_end(self: *Scanner) bool {
-        return self.current == self.end;
+        return @ptrToInt(self.current) >= @ptrToInt(self.end);
     }
 
     fn peek(self: *Scanner) u8 {

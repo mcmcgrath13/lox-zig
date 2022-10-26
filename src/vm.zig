@@ -1,4 +1,5 @@
 const std = @import("std");
+const HashMap = std.HashMap;
 
 const chnk = @import("chunk.zig");
 const Chunk = chnk.Chunk;
@@ -12,7 +13,20 @@ const compile = @import("compile.zig").compile;
 
 const disassemble_instruction = @import("debug.zig").disassemble_instruction;
 
+const obj = @import("object.zig");
+const Obj = obj.Obj;
+const take_string = obj.take_string;
+const ObjString = obj.ObjString;
+const ObjStringContext = obj.ObjStringContext;
+
 const STACK_MAX = 256;
+
+pub const ObjStringHashMap = HashMap(
+    *ObjString,
+    void,
+    ObjStringContext,
+    std.hash_map.default_max_load_percentage,
+);
 
 pub const InterpretError = error{
     compile,
@@ -22,17 +36,39 @@ pub const InterpretError = error{
 pub const VM = struct {
     chunk: ?*Chunk = null,
     ip: ?[*]u8 = null,
+    allocator: std.mem.Allocator,
 
     // TODO: revisit if this should really use pointer math
     stack: [STACK_MAX]Value = undefined,
     stack_top: usize = 0,
 
+    objects: ?*Obj = null,
+    strings: ObjStringHashMap,
+
     debug: bool = false,
 
-    pub fn init(debug: bool) VM { //allocator: std.mem.Allocator
+    pub fn init(debug: bool, allocator: std.mem.Allocator) VM {
+        const strings = ObjStringHashMap.init(allocator);
         return VM{
             .debug = debug,
+            .allocator = allocator,
+            .strings = strings,
         };
+    }
+
+    pub fn deinit(self: *VM) void {
+        self.free_objects();
+        self.strings.deinit();
+    }
+
+    pub fn free_objects(self: *VM) void {
+        var object: ?*Obj = self.objects;
+        while (object) |o| {
+            const next: ?*Obj = o.next;
+            o.deinit(self.allocator);
+            self.allocator.destroy(o);
+            object = next;
+        }
     }
 
     fn reset_stack(self: *VM) void {
@@ -53,14 +89,18 @@ pub const VM = struct {
         return self.stack[self.stack_top - 1 - distance];
     }
 
-    pub fn deinit() void { // self: *VM
-    }
-
-    pub fn interpret(self: *VM, allocator: std.mem.Allocator, source: []const u8) InterpretError!void {
-        var chunk = Chunk.init(allocator);
+    pub fn interpret(self: *VM, source: []const u8) InterpretError!void {
+        var chunk = Chunk.init(self.allocator);
         defer chunk.deinit();
 
-        compile(source, &chunk, self.debug) catch {
+        self.objects = compile(
+            source,
+            &chunk,
+            self.allocator,
+            self.debug,
+            self.objects,
+            &self.strings,
+        ) catch {
             return InterpretError.compile;
         };
         self.chunk = &chunk;
@@ -114,7 +154,14 @@ pub const VM = struct {
                 },
 
                 //binary
-                .add => try self.binary_op(f64, Value.number, add),
+                .add => {
+                    if (self.peek(0).is_string() and self.peek(1).is_string()) {
+                        try self.concatenate();
+                    } else {
+                        // TODO: fix error message
+                        try self.binary_op(f64, Value.number, add);
+                    }
+                },
                 .divide => try self.binary_op(f64, Value.number, divide),
                 .multiply => try self.binary_op(f64, Value.number, multiply),
                 .subtract => try self.binary_op(f64, Value.number, subtract),
@@ -142,7 +189,12 @@ pub const VM = struct {
         return self.chunk.?.constants.values.items[@intCast(usize, self.read_byte())];
     }
 
-    fn binary_op(self: *VM, comptime R: type, value_type: (fn (R) Value), op: (fn (f64, f64) R)) InterpretError!void {
+    fn binary_op(
+        self: *VM,
+        comptime R: type,
+        value_type: (fn (R) Value),
+        op: (fn (f64, f64) R),
+    ) InterpretError!void {
         if (!self.peek(0).is_number() or !self.peek(1).is_number()) {
             self.runtime_error(.{"operands must be numbers"});
             return InterpretError.runtime;
@@ -152,8 +204,18 @@ pub const VM = struct {
         self.push(value_type(op(left, right)));
     }
 
+    fn concatenate(self: *VM) InterpretError!void {
+        const b: []const u8 = self.pop().as_obj().as_string();
+        const a: []const u8 = self.pop().as_obj().as_string();
+        const data = std.mem.concat(self.allocator, u8, &[_][]const u8{ a, b }) catch {
+            self.runtime_error(.{"out of memory"});
+            return InterpretError.runtime;
+        };
+        self.push(Value.obj(take_string(&self.strings, data, self.allocator), &self.objects));
+    }
+
     fn runtime_error(self: *VM, args: anytype) void {
-        std.debug.print("{any}\n", args);
+        std.debug.print("{s}\n", args);
 
         const instruction: usize = @ptrToInt(self.ip.?) - @ptrToInt(self.chunk.?.code.items.ptr) - 1;
         const line: usize = self.chunk.?.lines.items[instruction];
