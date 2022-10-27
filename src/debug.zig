@@ -28,6 +28,7 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         .constant => constant_instruction("CONSTANT", c, offset),
         ._return => simple_instruction("RETURN", offset),
         .print => simple_instruction("PRINT", offset),
+        .pop => simple_instruction("POP", offset),
 
         // literals
         .nil => simple_instruction("NIL", offset),

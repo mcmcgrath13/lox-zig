@@ -165,6 +165,8 @@ pub const Compiler = struct {
     fn statement(self: *Compiler) void {
         if (self.parser.match(TokenType.print)) {
             self.print_statement();
+        } else {
+            self.expression_statement();
         }
     }
 
@@ -241,6 +243,12 @@ pub const Compiler = struct {
         self.expression();
         self.parser.consume(TokenType.semicolon, "expect ';' after value");
         self.emit_opcode(OpCode.print);
+    }
+
+    fn expression_statement(self: *Compiler) void {
+        self.expression();
+        self.parser.consume(TokenType.semicolon, "expect ';' after expression");
+        self.emit_opcode(OpCode.pop);
     }
 
     // Writing Byte Code to chunk helper methods

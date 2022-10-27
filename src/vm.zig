@@ -139,6 +139,7 @@ pub const VM = struct {
                     print_value(self.pop());
                     std.debug.print("\n", .{});
                 },
+                .pop => self.pop(),
 
                 // literals
                 .nil => self.push(Value.nil()),
