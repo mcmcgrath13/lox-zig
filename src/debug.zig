@@ -27,6 +27,7 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
     return switch (@intToEnum(OpCode, instruction_byte)) {
         .constant => constant_instruction("CONSTANT", c, offset),
         ._return => simple_instruction("RETURN", offset),
+        .print => simple_instruction("PRINT", offset),
 
         // literals
         .nil => simple_instruction("NIL", offset),

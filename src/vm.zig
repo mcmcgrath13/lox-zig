@@ -133,9 +133,11 @@ pub const VM = struct {
                     self.push(constant);
                 },
                 ._return => {
+                    return;
+                },
+                .print => {
                     print_value(self.pop());
                     std.debug.print("\n", .{});
-                    return;
                 },
 
                 // literals

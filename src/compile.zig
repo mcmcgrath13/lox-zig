@@ -129,8 +129,9 @@ pub const Compiler = struct {
     strings: *ObjStringHashMap,
 
     pub fn compile(self: *Compiler) !?*Obj {
-        self.expression();
-        self.parser.consume(TokenType.eof, "expected end of expression");
+        while (!self.parser.match(TokenType.eof)) {
+            self.declaration();
+        }
         self.end();
 
         if (self.parser.had_error) return compile_err;
@@ -154,6 +155,16 @@ pub const Compiler = struct {
                 return;
             };
             infix_rule(self);
+        }
+    }
+
+    fn declaration(self: *Compiler) void {
+        self.statement();
+    }
+
+    fn statement(self: *Compiler) void {
+        if (self.parser.match(TokenType.print)) {
+            self.print_statement();
         }
     }
 
@@ -225,6 +236,14 @@ pub const Compiler = struct {
         }
     }
 
+    // Statement compilations helper methods
+    fn print_statement(self: *Compiler) void {
+        self.expression();
+        self.parser.consume(TokenType.semicolon, "expect ';' after value");
+        self.emit_opcode(OpCode.print);
+    }
+
+    // Writing Byte Code to chunk helper methods
     fn emit_byte(self: *Compiler, byte: u8) void {
         self.current_chunk.write(byte, self.parser.current.line);
     }
@@ -288,12 +307,23 @@ const Parser = struct {
     }
 
     pub fn consume(self: *Parser, t: TokenType, message: []const u8) void {
-        if (self.current.t == t) {
+        if (self.check(t)) {
             self.advance();
             return;
         }
 
         self.error_at_current(message);
+    }
+
+    pub fn match(self: *Parser, t: TokenType) bool {
+        if (!self.check(t)) return false;
+
+        self.advance();
+        return true;
+    }
+
+    fn check(self: *Parser, t: TokenType) bool {
+        return self.current.t == t;
     }
 
     fn error_at_current(self: *Parser, message: ?[]const u8) void {
