@@ -26,6 +26,9 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
     const instruction_byte = c.code.items[offset];
     return switch (@intToEnum(OpCode, instruction_byte)) {
         .constant => constant_instruction("CONSTANT", c, offset),
+        .define_global => constant_instruction("DEFINE_GLOBAL", c, offset),
+        .get_global => constant_instruction("GET_GLOBAL", c, offset),
+        .set_global => constant_instruction("SET_GLOBAL", c, offset),
         ._return => simple_instruction("RETURN", offset),
         .print => simple_instruction("PRINT", offset),
         .pop => simple_instruction("POP", offset),
