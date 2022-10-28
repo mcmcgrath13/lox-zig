@@ -46,9 +46,9 @@ pub const Obj = struct {
         }
     }
 
-    pub fn as_string(self: *Obj) []const u8 {
+    pub fn as_string(self: *Obj) *ObjString {
         switch (self.t) {
-            .string => return self.t.string.data,
+            .string => return self.t.string,
         }
     }
 };

@@ -35,7 +35,7 @@ const Precedence = enum(u8) {
     primary,
 };
 
-const ParseFn = fn (compiler: *Compiler) void;
+const ParseFn = fn (compiler: *Compiler, can_assign: bool) void;
 
 const ParseRule = struct {
     prefix: ?ParseFn,
@@ -67,7 +67,7 @@ const RULES = [_]ParseRule{
     .{ .prefix = null, .infix = Compiler.binary, .precedence = .comparison }, // less,
     .{ .prefix = null, .infix = Compiler.binary, .precedence = .comparison }, // less_equal,
     // Literals.
-    .{ .prefix = null, .infix = null, .precedence = .none }, // identifier,
+    .{ .prefix = Compiler.variable, .infix = null, .precedence = .none }, // identifier,
     .{ .prefix = Compiler.string, .infix = null, .precedence = .none }, // string,
     .{ .prefix = Compiler.number, .infix = null, .precedence = .none }, // number,
     // Keywords.
@@ -101,9 +101,9 @@ pub fn compile(
     chunk: *Chunk,
     allocator: std.mem.Allocator,
     debug: bool,
-    objects: ?*Obj,
+    objects: *?*Obj,
     strings: *ObjStringHashMap,
-) !?*Obj {
+) !void {
     var scanner = Scanner.init(source);
     var parser = Parser.init(&scanner);
     parser.advance();
@@ -117,7 +117,7 @@ pub fn compile(
         .strings = strings,
     };
 
-    return compiler.compile();
+    try compiler.compile();
 }
 
 pub const Compiler = struct {
@@ -125,17 +125,16 @@ pub const Compiler = struct {
     parser: *Parser,
     allocator: std.mem.Allocator,
     debug: bool,
-    objects: ?*Obj,
+    objects: *?*Obj,
     strings: *ObjStringHashMap,
 
-    pub fn compile(self: *Compiler) !?*Obj {
-        self.expression();
-        self.parser.consume(TokenType.eof, "expected end of expression");
+    pub fn compile(self: *Compiler) !void {
+        while (!self.parser.match(TokenType.eof)) {
+            self.declaration();
+        }
         self.end();
 
         if (self.parser.had_error) return compile_err;
-
-        return self.objects;
     }
 
     fn parse_precedence(self: *Compiler, precedence: Precedence) void {
@@ -145,15 +144,41 @@ pub const Compiler = struct {
             return;
         };
 
-        prefix_rule(self);
+        const precedence_int = @enumToInt(precedence);
+        const can_assign = precedence_int <= @enumToInt(Precedence.assignment);
+        prefix_rule(self, can_assign);
 
-        while (@enumToInt(precedence) <= @enumToInt(get_rule(self.parser.current.t).precedence)) {
+        while (precedence_int <= @enumToInt(get_rule(self.parser.current.t).precedence)) {
             self.parser.advance();
             // TODO: unclear if this translation is correct
             const infix_rule = get_rule(self.parser.previous.t).infix orelse {
                 return;
             };
-            infix_rule(self);
+            infix_rule(self, can_assign);
+        }
+
+        if (can_assign and self.parser.match(TokenType.equal)) {
+            self.parser.error_at_previous("invalid assignment target");
+        }
+    }
+
+    fn declaration(self: *Compiler) void {
+        if (self.parser.match(TokenType.cf_var)) {
+            self.var_declaration();
+        } else {
+            self.statement();
+        }
+
+        if (self.parser.panic_mode) {
+            self.parser.synchronize();
+        }
+    }
+
+    fn statement(self: *Compiler) void {
+        if (self.parser.match(TokenType.print)) {
+            self.print_statement();
+        } else {
+            self.expression_statement();
         }
     }
 
@@ -161,7 +186,7 @@ pub const Compiler = struct {
         self.parse_precedence(Precedence.assignment);
     }
 
-    fn number(self: *Compiler) void {
+    fn number(self: *Compiler, _: bool) void {
         // TODO: error handling
         const value = std.fmt.parseFloat(
             f64,
@@ -170,16 +195,30 @@ pub const Compiler = struct {
         self.emit_constant(Value.number(value));
     }
 
-    fn string(self: *Compiler) void {
+    fn string(self: *Compiler, _: bool) void {
         var object = alloc_string(
             self.strings,
             self.parser.previous.start[1 .. self.parser.previous.length - 1],
             self.allocator,
         );
-        self.emit_constant(Value.obj(object, &self.objects));
+        self.emit_constant(Value.obj(object, self.objects));
     }
 
-    fn literal(self: *Compiler) void {
+    fn variable(self: *Compiler, can_assign: bool) void {
+        self.named_variable(self.parser.previous, can_assign);
+    }
+
+    fn named_variable(self: *Compiler, token: Token, can_assign: bool) void {
+        const arg = self.identifier_constant(token);
+        if (can_assign and self.parser.match(TokenType.equal)) {
+            self.expression();
+            self.emit_compound(OpCode.set_global, arg);
+        } else {
+            self.emit_compound(OpCode.get_global, arg);
+        }
+    }
+
+    fn literal(self: *Compiler, _: bool) void {
         switch (self.parser.previous.t) {
             .logical_false => self.emit_opcode(OpCode._false),
             .logical_true => self.emit_opcode(OpCode._true),
@@ -188,12 +227,12 @@ pub const Compiler = struct {
         }
     }
 
-    fn grouping(self: *Compiler) void {
+    fn grouping(self: *Compiler, _: bool) void {
         self.expression();
         self.parser.consume(TokenType.right_paren, "expect ')' after expression");
     }
 
-    fn unary(self: *Compiler) void {
+    fn unary(self: *Compiler, _: bool) void {
         const operator_type = self.parser.previous.t;
 
         self.parse_precedence(Precedence.unary);
@@ -205,7 +244,7 @@ pub const Compiler = struct {
         }
     }
 
-    fn binary(self: *Compiler) void {
+    fn binary(self: *Compiler, _: bool) void {
         const operator_type = self.parser.previous.t;
         const rule = get_rule(operator_type);
         self.parse_precedence(@intToEnum(Precedence, @enumToInt(rule.precedence) + 1));
@@ -225,6 +264,51 @@ pub const Compiler = struct {
         }
     }
 
+    // Statement compilations helper methods
+    fn print_statement(self: *Compiler) void {
+        self.expression();
+        self.parser.consume(TokenType.semicolon, "expect ';' after value");
+        self.emit_opcode(OpCode.print);
+    }
+
+    fn expression_statement(self: *Compiler) void {
+        self.expression();
+        self.parser.consume(TokenType.semicolon, "expect ';' after expression");
+        self.emit_opcode(OpCode.pop);
+    }
+
+    fn var_declaration(self: *Compiler) void {
+        const global = self.parse_variable("expect variable name");
+
+        if (self.parser.match(TokenType.equal)) {
+            self.expression();
+        } else {
+            self.emit_opcode(OpCode.nil);
+        }
+
+        self.parser.consume(TokenType.semicolon, "expect ';' after declaration");
+
+        self.define_variable(global);
+    }
+
+    fn parse_variable(self: *Compiler, message: []const u8) u8 {
+        self.parser.consume(TokenType.identifier, message);
+        return self.identifier_constant(self.parser.previous);
+    }
+
+    fn define_variable(self: *Compiler, index: u8) void {
+        self.emit_compound(OpCode.define_global, index);
+    }
+
+    fn identifier_constant(self: *Compiler, token: Token) u8 {
+        return self.make_constant(Value.obj(alloc_string(
+            self.strings,
+            token.start[0..token.length],
+            self.allocator,
+        ), self.objects));
+    }
+
+    // Writing Byte Code to chunk helper methods
     fn emit_byte(self: *Compiler, byte: u8) void {
         self.current_chunk.write(byte, self.parser.current.line);
     }
@@ -239,9 +323,13 @@ pub const Compiler = struct {
         }
     }
 
+    fn emit_compound(self: *Compiler, op: OpCode, byte: u8) void {
+        self.emit_opcode(op);
+        self.emit_byte(byte);
+    }
+
     fn emit_constant(self: *Compiler, value: Value) void {
-        self.emit_opcode(OpCode.constant);
-        self.emit_byte(self.make_constant(value));
+        self.emit_compound(OpCode.constant, self.make_constant(value));
     }
 
     fn make_constant(self: *Compiler, value: Value) u8 {
@@ -288,12 +376,42 @@ const Parser = struct {
     }
 
     pub fn consume(self: *Parser, t: TokenType, message: []const u8) void {
-        if (self.current.t == t) {
+        if (self.check(t)) {
             self.advance();
             return;
         }
 
         self.error_at_current(message);
+    }
+
+    pub fn match(self: *Parser, t: TokenType) bool {
+        if (!self.check(t)) return false;
+
+        self.advance();
+        return true;
+    }
+
+    fn check(self: *Parser, t: TokenType) bool {
+        return self.current.t == t;
+    }
+
+    fn synchronize(self: *Parser) void {
+        self.panic_mode = false;
+
+        while (self.current.t != TokenType.eof) : (self.advance()) {
+            if (self.previous.t == TokenType.semicolon) return;
+            switch (self.current.t) {
+                .class => return,
+                .fun => return,
+                .cf_var => return,
+                .cf_for => return,
+                .cf_if => return,
+                .cf_while => return,
+                .print => return,
+                .cf_return => return,
+                else => {},
+            }
+        }
     }
 
     fn error_at_current(self: *Parser, message: ?[]const u8) void {
@@ -321,7 +439,7 @@ const Parser = struct {
         // if there is no message, use the token content, which in the case of scan_error token's
         // is actually the message itself
         const message_str: []const u8 = message orelse token.start[0..token.length];
-        std.debug.print(": {s}", .{message_str});
+        std.debug.print(": {s}\n", .{message_str});
         self.had_error = true;
     }
 };

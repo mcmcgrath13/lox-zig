@@ -8,7 +8,12 @@ const Value = @import("value.zig").Value;
 
 pub const OpCode = enum(u8) {
     constant,
+    define_global,
+    get_global,
+    set_global,
     _return,
+    print,
+    pop,
 
     // literals
     nil,

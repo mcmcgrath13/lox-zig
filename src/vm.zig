@@ -28,6 +28,8 @@ pub const ObjStringHashMap = HashMap(
     std.hash_map.default_max_load_percentage,
 );
 
+pub const VariableHashMap = std.AutoHashMap(*ObjString, Value);
+
 pub const InterpretError = error{
     compile,
     runtime,
@@ -45,20 +47,25 @@ pub const VM = struct {
     objects: ?*Obj = null,
     strings: ObjStringHashMap,
 
+    globals: VariableHashMap,
+
     debug: bool = false,
 
     pub fn init(debug: bool, allocator: std.mem.Allocator) VM {
         const strings = ObjStringHashMap.init(allocator);
+        const globals = VariableHashMap.init(allocator);
         return VM{
             .debug = debug,
             .allocator = allocator,
             .strings = strings,
+            .globals = globals,
         };
     }
 
     pub fn deinit(self: *VM) void {
         self.free_objects();
         self.strings.deinit();
+        self.globals.deinit();
     }
 
     pub fn free_objects(self: *VM) void {
@@ -93,12 +100,12 @@ pub const VM = struct {
         var chunk = Chunk.init(self.allocator);
         defer chunk.deinit();
 
-        self.objects = compile(
+        compile(
             source,
             &chunk,
             self.allocator,
             self.debug,
-            self.objects,
+            &self.objects,
             &self.strings,
         ) catch {
             return InterpretError.compile;
@@ -132,10 +139,41 @@ pub const VM = struct {
                     const constant = self.read_constant();
                     self.push(constant);
                 },
+                .define_global => {
+                    var name = self.read_constant().as_obj().as_string();
+                    self.globals.put(name, self.peek(0)) catch {
+                        std.debug.print("Out of memory!\n", .{});
+                        std.process.exit(1);
+                    };
+                    _ = self.pop();
+                },
+                .get_global => {
+                    var name = self.read_constant().as_obj().as_string();
+                    if (self.globals.get(name)) |value| {
+                        self.push(value);
+                    } else {
+                        self.runtime_error("undefined variable '{s}'", .{name.data});
+                        return InterpretError.runtime;
+                    }
+                },
+                .set_global => {
+                    var name = self.read_constant().as_obj().as_string();
+                    if (self.globals.getPtr(name)) |value_ptr| {
+                        value_ptr.* = self.peek(0);
+                    } else {
+                        self.runtime_error("can't assign to undefined variable '{s}'", .{name.data});
+                        return InterpretError.runtime;
+                    }
+                },
                 ._return => {
+                    return;
+                },
+                .print => {
                     print_value(self.pop());
                     std.debug.print("\n", .{});
-                    return;
+                },
+                .pop => {
+                    _ = self.pop();
                 },
 
                 // literals
@@ -147,7 +185,7 @@ pub const VM = struct {
                 .not => self.push(Value.boolean(self.pop().is_falsey())),
                 .negate => {
                     if (!self.peek(0).is_number()) {
-                        self.runtime_error(.{"operand must be a number"});
+                        self.runtime_error("operand must be a number: found {s}", .{print_value(self.peek(0))});
                         return InterpretError.runtime;
                     }
                     self.push(Value.number(-1 * self.pop().as_number()));
@@ -186,7 +224,7 @@ pub const VM = struct {
     }
 
     fn read_constant(self: *VM) Value {
-        return self.chunk.?.constants.values.items[@intCast(usize, self.read_byte())];
+        return self.chunk.?.constants.values.items[self.read_byte()];
     }
 
     fn binary_op(
@@ -196,7 +234,10 @@ pub const VM = struct {
         op: (fn (f64, f64) R),
     ) InterpretError!void {
         if (!self.peek(0).is_number() or !self.peek(1).is_number()) {
-            self.runtime_error(.{"operands must be numbers"});
+            self.runtime_error(
+                "operands must be numbers, found: {s} {s}",
+                .{ print_value(self.peek(0)), print_value(self.peek(1)) },
+            );
             return InterpretError.runtime;
         }
         const right = self.pop().as_number();
@@ -205,17 +246,23 @@ pub const VM = struct {
     }
 
     fn concatenate(self: *VM) InterpretError!void {
-        const b: []const u8 = self.pop().as_obj().as_string();
-        const a: []const u8 = self.pop().as_obj().as_string();
+        const b: []const u8 = self.pop().as_obj().as_string().data;
+        const a: []const u8 = self.pop().as_obj().as_string().data;
         const data = std.mem.concat(self.allocator, u8, &[_][]const u8{ a, b }) catch {
-            self.runtime_error(.{"out of memory"});
+            self.runtime_error("out of memory", .{});
             return InterpretError.runtime;
         };
-        self.push(Value.obj(take_string(&self.strings, data, self.allocator), &self.objects));
+        self.push(
+            Value.obj(take_string(&self.strings, data, self.allocator), &self.objects),
+        );
     }
 
-    fn runtime_error(self: *VM, args: anytype) void {
-        std.debug.print("{s}\n", args);
+    fn runtime_error(
+        self: *VM,
+        comptime format: []const u8,
+        args: anytype,
+    ) void {
+        std.debug.print(format, args);
 
         const instruction: usize = @ptrToInt(self.ip.?) - @ptrToInt(self.chunk.?.code.items.ptr) - 1;
         const line: usize = self.chunk.?.lines.items[instruction];
