@@ -165,6 +165,14 @@ pub const VM = struct {
                         return InterpretError.runtime;
                     }
                 },
+                .get_local => {
+                    const idx = self.read_byte();
+                    self.push(self.stack[idx]);
+                },
+                .set_local => {
+                    const idx = self.read_byte();
+                    self.stack[idx] = self.peek(0);
+                },
                 ._return => {
                     return;
                 },

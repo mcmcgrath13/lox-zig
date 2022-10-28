@@ -29,6 +29,8 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         .define_global => constant_instruction("DEFINE_GLOBAL", c, offset),
         .get_global => constant_instruction("GET_GLOBAL", c, offset),
         .set_global => constant_instruction("SET_GLOBAL", c, offset),
+        .get_local => byte_instruction("GET_LOCAL", c, offset),
+        .set_local => byte_instruction("SET_LOCAL", c, offset),
         ._return => simple_instruction("RETURN", offset),
         .print => simple_instruction("PRINT", offset),
         .pop => simple_instruction("POP", offset),
@@ -66,5 +68,11 @@ pub fn constant_instruction(name: []const u8, c: *Chunk, offset: usize) usize {
     std.debug.print("{s: <16} {d: >4} ", .{ name, constant_idx });
     print_value(c.constants.values.items[constant_idx]);
     std.debug.print("\n", .{});
+    return offset + 2;
+}
+
+fn byte_instruction(name: []const u8, c: *Chunk, offset: usize) usize {
+    const byte_idx: usize = c.code.items[offset + 1];
+    std.debug.print("{s: <16} {d: >4}\n", .{ name, byte_idx });
     return offset + 2;
 }

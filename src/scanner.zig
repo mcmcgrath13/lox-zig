@@ -212,6 +212,14 @@ pub const Token = struct {
     start: [*]const u8,
     length: usize,
     line: usize,
+
+    pub fn equals(self: Token, other: Token) bool {
+        return std.mem.eql(
+            u8,
+            self.start[0..self.length],
+            other.start[0..other.length],
+        );
+    }
 };
 
 pub const TokenType = enum(u8) {
