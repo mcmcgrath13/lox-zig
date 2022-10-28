@@ -20,6 +20,7 @@ const alloc_string = obj.alloc_string;
 const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
 
 const compile_err = error.CompileFailed;
+const local_not_found = error.LocalNotFound;
 
 const Precedence = enum(u8) {
     none,
@@ -120,6 +121,11 @@ pub fn compile(
     try compiler.compile();
 }
 
+const Local = struct {
+    token: Token,
+    depth: ?u8 = null,
+};
+
 pub const Compiler = struct {
     current_chunk: *Chunk,
     parser: *Parser,
@@ -127,6 +133,10 @@ pub const Compiler = struct {
     debug: bool,
     objects: *?*Obj,
     strings: *ObjStringHashMap,
+
+    locals: [std.math.maxInt(u8)]Local = undefined,
+    local_count: u8 = 0,
+    scope_depth: u8 = 0,
 
     pub fn compile(self: *Compiler) !void {
         while (!self.parser.match(TokenType.eof)) {
@@ -177,6 +187,10 @@ pub const Compiler = struct {
     fn statement(self: *Compiler) void {
         if (self.parser.match(TokenType.print)) {
             self.print_statement();
+        } else if (self.parser.match(TokenType.left_brace)) {
+            self.begin_scope();
+            self.block();
+            self.end_scope();
         } else {
             self.expression_statement();
         }
@@ -184,6 +198,14 @@ pub const Compiler = struct {
 
     fn expression(self: *Compiler) void {
         self.parse_precedence(Precedence.assignment);
+    }
+
+    fn block(self: *Compiler) void {
+        while (!self.parser.check(TokenType.right_brace) and !self.parser.check(TokenType.eof)) {
+            self.declaration();
+        }
+
+        self.parser.consume(TokenType.right_brace, "expect '}' at end of block");
     }
 
     fn number(self: *Compiler, _: bool) void {
@@ -209,12 +231,19 @@ pub const Compiler = struct {
     }
 
     fn named_variable(self: *Compiler, token: Token, can_assign: bool) void {
-        const arg = self.identifier_constant(token);
+        var get_op = OpCode.get_local;
+        var set_op = OpCode.set_local;
+        var arg = self.resolve_local(token) catch blk: {
+            get_op = OpCode.get_global;
+            set_op = OpCode.set_global;
+            break :blk self.identifier_constant(token);
+        };
+
         if (can_assign and self.parser.match(TokenType.equal)) {
             self.expression();
-            self.emit_compound(OpCode.set_global, arg);
+            self.emit_compound(set_op, arg);
         } else {
-            self.emit_compound(OpCode.get_global, arg);
+            self.emit_compound(get_op, arg);
         }
     }
 
@@ -293,10 +322,16 @@ pub const Compiler = struct {
 
     fn parse_variable(self: *Compiler, message: []const u8) u8 {
         self.parser.consume(TokenType.identifier, message);
+        self.declare_variable();
+        if (self.scope_depth > 0) return 0;
         return self.identifier_constant(self.parser.previous);
     }
 
     fn define_variable(self: *Compiler, index: u8) void {
+        if (self.scope_depth > 0) {
+            self.mark_initialized();
+            return;
+        }
         self.emit_compound(OpCode.define_global, index);
     }
 
@@ -306,6 +341,54 @@ pub const Compiler = struct {
             token.start[0..token.length],
             self.allocator,
         ), self.objects));
+    }
+
+    fn declare_variable(self: *Compiler) void {
+        if (self.scope_depth == 0) return;
+
+        const token = self.parser.previous;
+        if (self.local_count > 0) {
+            var i = self.local_count - 1;
+            while (i >= 0) : (i -= 1) {
+                var local: *Local = &self.locals[i];
+                if (local.depth != null and local.depth.? < self.scope_depth) break;
+
+                if (token.equals(local.token)) {
+                    self.parser.error_at_previous("local variable already delcared");
+                }
+            }
+        }
+        self.add_local(token);
+    }
+
+    fn add_local(self: *Compiler, token: Token) void {
+        if (self.local_count > std.math.maxInt(u8)) {
+            self.parser.error_at_previous("too many local variables");
+            return;
+        }
+        var local: *Local = &self.locals[self.local_count];
+        self.local_count += 1;
+        local.* = .{ .token = token };
+    }
+
+    fn mark_initialized(self: *Compiler) void {
+        var local: *Local = &self.locals[self.local_count - 1];
+        local.depth = self.scope_depth;
+    }
+
+    fn resolve_local(self: *Compiler, token: Token) !u8 {
+        if (self.local_count == 0) return local_not_found;
+        var i = self.local_count - 1;
+        while (i >= 0) : (i -= 1) {
+            if (token.equals(self.locals[i].token)) {
+                if (self.locals[i].depth == null) {
+                    self.parser.error_at_previous("can't read local variable in its own initializer");
+                }
+                return i;
+            }
+        }
+
+        return local_not_found;
     }
 
     // Writing Byte Code to chunk helper methods
@@ -340,6 +423,20 @@ pub const Compiler = struct {
         }
 
         return @intCast(u8, constant_idx);
+    }
+
+    // helpers for handling scope
+    fn begin_scope(self: *Compiler) void {
+        self.scope_depth += 1;
+    }
+
+    fn end_scope(self: *Compiler) void {
+        self.scope_depth -= 1;
+
+        while (self.local_count > 0 and self.locals[self.local_count - 1].depth.? > self.scope_depth) {
+            self.emit_opcode(OpCode.pop);
+            self.local_count -= 1;
+        }
     }
 
     fn end(self: *Compiler) void {
