@@ -22,7 +22,7 @@ const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
 const compile_err = error.CompileFailed;
 const local_not_found = error.LocalNotFound;
 
-const PLACEHOLDER_BYTE: u8 = 0xff;
+const HIGH_BYTE: u8 = 0xff;
 
 const Precedence = enum(u8) {
     none,
@@ -560,8 +560,8 @@ pub const Compiler = struct {
 
     fn emit_jump(self: *Compiler, op: OpCode) usize {
         self.emit_opcode(op);
-        self.emit_byte(PLACEHOLDER_BYTE);
-        self.emit_byte(PLACEHOLDER_BYTE);
+        self.emit_byte(HIGH_BYTE);
+        self.emit_byte(HIGH_BYTE);
         return self.current_chunk.length() - 2;
     }
 
@@ -573,8 +573,8 @@ pub const Compiler = struct {
             self.parser.error_at_previous("too much code to jump over");
         }
 
-        self.current_chunk.code.items[offset] = @intCast(u8, jump >> 8) & PLACEHOLDER_BYTE;
-        self.current_chunk.code.items[offset + 1] = @intCast(u8, jump) & PLACEHOLDER_BYTE;
+        self.current_chunk.code.items[offset] = @intCast(u8, jump >> 8) & HIGH_BYTE;
+        self.current_chunk.code.items[offset + 1] = @intCast(u8, jump) & HIGH_BYTE;
     }
 
     fn emit_loop(self: *Compiler, loop_start: usize) void {
@@ -585,8 +585,8 @@ pub const Compiler = struct {
             self.parser.error_at_previous("too much code in loop");
         }
 
-        self.emit_byte(@intCast(u8, jump >> 8) & PLACEHOLDER_BYTE);
-        self.emit_byte(@intCast(u8, jump) & PLACEHOLDER_BYTE);
+        self.emit_byte(@intCast(u8, jump >> 8) & HIGH_BYTE);
+        self.emit_byte(@intCast(u8, jump) & HIGH_BYTE);
     }
 
     // helpers for handling scope
