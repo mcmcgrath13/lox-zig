@@ -74,7 +74,7 @@ const RULES = [_]ParseRule{
     .{ .prefix = Compiler.string, .infix = null, .precedence = .none }, // string,
     .{ .prefix = Compiler.number, .infix = null, .precedence = .none }, // number,
     // Keywords.
-    .{ .prefix = null, .infix = null, .precedence = .none }, // logical_and,
+    .{ .prefix = null, .infix = Compiler.logical_and, .precedence = ._and }, // logical_and,
     .{ .prefix = null, .infix = null, .precedence = .none }, // class,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_else,
     .{ .prefix = Compiler.literal, .infix = null, .precedence = .none }, // logical_false,
@@ -82,7 +82,7 @@ const RULES = [_]ParseRule{
     .{ .prefix = null, .infix = null, .precedence = .none }, // fun,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_if,
     .{ .prefix = Compiler.literal, .infix = null, .precedence = .none }, // nil,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // logical_or,
+    .{ .prefix = null, .infix = Compiler.logical_or, .precedence = ._or }, // logical_or,
     .{ .prefix = null, .infix = null, .precedence = .none }, // print,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_return,
     .{ .prefix = null, .infix = null, .precedence = .none }, // super,
@@ -295,6 +295,26 @@ pub const Compiler = struct {
             .greater_equal => self.emit_opcodes(.{ OpCode.less, OpCode.not }),
             else => return,
         }
+    }
+
+    fn logical_and(self: *Compiler, _: bool) void {
+        const end_jump = self.emit_jump(OpCode.jump_if_false);
+        self.emit_opcode(OpCode.pop);
+
+        self.parse_precedence(Precedence._and);
+
+        self.patch_jump(end_jump);
+    }
+
+    fn logical_or(self: *Compiler, _: bool) void {
+        const else_jump = self.emit_jump(OpCode.jump_if_false);
+        const end_jump = self.emit_jump(OpCode.jump);
+
+        self.patch_jump(else_jump);
+        self.emit_opcode(OpCode.pop);
+
+        self.parse_precedence(Precedence._or);
+        self.patch_jump(end_jump);
     }
 
     // Statement compilations helper methods

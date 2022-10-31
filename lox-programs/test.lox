@@ -25,3 +25,9 @@ if (false) {
 } else {
     print "false";
 }
+
+print false or "false";
+print true and "true";
+
+print true or "uh oh";
+print false and "uh oh";
