@@ -22,6 +22,8 @@ const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
 const compile_err = error.CompileFailed;
 const local_not_found = error.LocalNotFound;
 
+const HIGH_BYTE: u8 = 0xff;
+
 const Precedence = enum(u8) {
     none,
     assignment, // =
@@ -72,7 +74,7 @@ const RULES = [_]ParseRule{
     .{ .prefix = Compiler.string, .infix = null, .precedence = .none }, // string,
     .{ .prefix = Compiler.number, .infix = null, .precedence = .none }, // number,
     // Keywords.
-    .{ .prefix = null, .infix = null, .precedence = .none }, // logical_and,
+    .{ .prefix = null, .infix = Compiler.logical_and, .precedence = ._and }, // logical_and,
     .{ .prefix = null, .infix = null, .precedence = .none }, // class,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_else,
     .{ .prefix = Compiler.literal, .infix = null, .precedence = .none }, // logical_false,
@@ -80,7 +82,7 @@ const RULES = [_]ParseRule{
     .{ .prefix = null, .infix = null, .precedence = .none }, // fun,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_if,
     .{ .prefix = Compiler.literal, .infix = null, .precedence = .none }, // nil,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // logical_or,
+    .{ .prefix = null, .infix = Compiler.logical_or, .precedence = ._or }, // logical_or,
     .{ .prefix = null, .infix = null, .precedence = .none }, // print,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_return,
     .{ .prefix = null, .infix = null, .precedence = .none }, // super,
@@ -187,6 +189,12 @@ pub const Compiler = struct {
     fn statement(self: *Compiler) void {
         if (self.parser.match(TokenType.print)) {
             self.print_statement();
+        } else if (self.parser.match(TokenType.cf_if)) {
+            self.if_statement();
+        } else if (self.parser.match(TokenType.cf_while)) {
+            self.while_statement();
+        } else if (self.parser.match(TokenType.cf_for)) {
+            self.for_statement();
         } else if (self.parser.match(TokenType.left_brace)) {
             self.begin_scope();
             self.block();
@@ -205,7 +213,10 @@ pub const Compiler = struct {
             self.declaration();
         }
 
-        self.parser.consume(TokenType.right_brace, "expect '}' at end of block");
+        self.parser.consume(
+            TokenType.right_brace,
+            "expect '}' at end of block",
+        );
     }
 
     fn number(self: *Compiler, _: bool) void {
@@ -258,7 +269,10 @@ pub const Compiler = struct {
 
     fn grouping(self: *Compiler, _: bool) void {
         self.expression();
-        self.parser.consume(TokenType.right_paren, "expect ')' after expression");
+        self.parser.consume(
+            TokenType.right_paren,
+            "expect ')' after expression",
+        );
     }
 
     fn unary(self: *Compiler, _: bool) void {
@@ -276,7 +290,10 @@ pub const Compiler = struct {
     fn binary(self: *Compiler, _: bool) void {
         const operator_type = self.parser.previous.t;
         const rule = get_rule(operator_type);
-        self.parse_precedence(@intToEnum(Precedence, @enumToInt(rule.precedence) + 1));
+        self.parse_precedence(@intToEnum(
+            Precedence,
+            @enumToInt(rule.precedence) + 1,
+        ));
 
         switch (operator_type) {
             .plus => self.emit_opcode(OpCode.add),
@@ -293,11 +310,124 @@ pub const Compiler = struct {
         }
     }
 
+    fn logical_and(self: *Compiler, _: bool) void {
+        const end_jump = self.emit_jump(OpCode.jump_if_false);
+        self.emit_opcode(OpCode.pop);
+
+        self.parse_precedence(Precedence._and);
+
+        self.patch_jump(end_jump);
+    }
+
+    fn logical_or(self: *Compiler, _: bool) void {
+        const else_jump = self.emit_jump(OpCode.jump_if_false);
+        const end_jump = self.emit_jump(OpCode.jump);
+
+        self.patch_jump(else_jump);
+        self.emit_opcode(OpCode.pop);
+
+        self.parse_precedence(Precedence._or);
+        self.patch_jump(end_jump);
+    }
+
     // Statement compilations helper methods
     fn print_statement(self: *Compiler) void {
         self.expression();
         self.parser.consume(TokenType.semicolon, "expect ';' after value");
         self.emit_opcode(OpCode.print);
+    }
+
+    fn if_statement(self: *Compiler) void {
+        self.parser.consume(TokenType.left_paren, "expect '(' after if");
+        self.expression();
+        self.parser.consume(
+            TokenType.right_paren,
+            "expect ')' after if condition",
+        );
+
+        const then_jump = self.emit_jump(OpCode.jump_if_false);
+        self.emit_opcode(OpCode.pop);
+
+        self.statement();
+        const else_jump = self.emit_jump(OpCode.jump);
+        self.emit_opcode(OpCode.pop);
+
+        self.patch_jump(then_jump);
+
+        if (self.parser.match(TokenType.cf_else)) {
+            self.statement();
+        }
+
+        self.patch_jump(else_jump);
+    }
+
+    fn while_statement(self: *Compiler) void {
+        const loop_start = self.current_chunk.length();
+
+        self.parser.consume(TokenType.left_paren, "expect '(' after while");
+        self.expression();
+        self.parser.consume(
+            TokenType.right_paren,
+            "expect ')' after while condition",
+        );
+
+        const end_jump = self.emit_jump(OpCode.jump_if_false);
+        self.emit_opcode(OpCode.pop);
+        self.statement();
+        self.emit_loop(loop_start);
+
+        self.patch_jump(end_jump);
+        self.emit_opcode(OpCode.pop);
+    }
+
+    fn for_statement(self: *Compiler) void {
+        self.begin_scope();
+
+        self.parser.consume(TokenType.left_paren, "expect '(' after for");
+        if (self.parser.match(TokenType.semicolon)) {} else if (self.parser.match(TokenType.cf_var)) {
+            self.var_declaration();
+        } else {
+            self.expression_statement();
+        }
+
+        var loop_start = self.current_chunk.length();
+        var exit_jump: ?usize = null;
+
+        if (!self.parser.match(TokenType.semicolon)) {
+            self.expression();
+            self.parser.consume(
+                TokenType.semicolon,
+                "expect ';' after for condition",
+            );
+
+            exit_jump = self.emit_jump(OpCode.jump_if_false);
+            self.emit_opcode(OpCode.pop);
+        }
+
+        if (!self.parser.match(TokenType.right_paren)) {
+            const body_jump = self.emit_jump(OpCode.jump);
+            const incr_start = self.current_chunk.length();
+            self.expression();
+            self.emit_opcode(OpCode.pop);
+            self.parser.consume(
+                TokenType.right_paren,
+                "expect ')' after while increment",
+            );
+
+            self.emit_loop(loop_start);
+            loop_start = incr_start;
+            self.patch_jump(body_jump);
+        }
+
+        self.statement();
+        self.emit_loop(loop_start);
+
+        if (exit_jump) |jump| {
+            self.patch_jump(jump);
+            self.emit_opcode(OpCode.pop);
+        }
+
+        self.end_scope();
     }
 
     fn expression_statement(self: *Compiler) void {
@@ -315,7 +445,10 @@ pub const Compiler = struct {
             self.emit_opcode(OpCode.nil);
         }
 
-        self.parser.consume(TokenType.semicolon, "expect ';' after declaration");
+        self.parser.consume(
+            TokenType.semicolon,
+            "expect ';' after declaration",
+        );
 
         self.define_variable(global);
     }
@@ -377,14 +510,14 @@ pub const Compiler = struct {
     }
 
     fn resolve_local(self: *Compiler, token: Token) !u8 {
-        if (self.local_count == 0) return local_not_found;
-        var i = self.local_count - 1;
-        while (i >= 0) : (i -= 1) {
-            if (token.equals(self.locals[i].token)) {
-                if (self.locals[i].depth == null) {
+        var i = self.local_count;
+        while (i > 0) : (i -= 1) {
+            const local_idx = i - 1;
+            if (token.equals(self.locals[local_idx].token)) {
+                if (self.locals[local_idx].depth == null) {
                     self.parser.error_at_previous("can't read local variable in its own initializer");
                 }
-                return i;
+                return local_idx;
             }
         }
 
@@ -423,6 +556,37 @@ pub const Compiler = struct {
         }
 
         return @intCast(u8, constant_idx);
+    }
+
+    fn emit_jump(self: *Compiler, op: OpCode) usize {
+        self.emit_opcode(op);
+        self.emit_byte(HIGH_BYTE);
+        self.emit_byte(HIGH_BYTE);
+        return self.current_chunk.length() - 2;
+    }
+
+    fn patch_jump(self: *Compiler, offset: usize) void {
+        // account for bytes containing the jump value
+        const jump = self.current_chunk.length() - (offset + 2);
+
+        if (jump > std.math.maxInt(u16)) {
+            self.parser.error_at_previous("too much code to jump over");
+        }
+
+        self.current_chunk.code.items[offset] = @intCast(u8, jump >> 8) & HIGH_BYTE;
+        self.current_chunk.code.items[offset + 1] = @intCast(u8, jump) & HIGH_BYTE;
+    }
+
+    fn emit_loop(self: *Compiler, loop_start: usize) void {
+        self.emit_opcode(OpCode.loop);
+
+        const jump = self.current_chunk.length() - loop_start + 2;
+        if (jump > std.math.maxInt(u16)) {
+            self.parser.error_at_previous("too much code in loop");
+        }
+
+        self.emit_byte(@intCast(u8, jump >> 8) & HIGH_BYTE);
+        self.emit_byte(@intCast(u8, jump) & HIGH_BYTE);
     }
 
     // helpers for handling scope

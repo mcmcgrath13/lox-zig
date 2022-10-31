@@ -12,3 +12,22 @@ print breakfast;
     print a;
   }
 }
+
+
+if (true) {
+    print "true";
+} else {
+    print "false";
+}
+
+if (false) {
+    print "true";
+} else {
+    print "false";
+}
+
+print false or "false";
+print true and "true";
+
+print true or "uh oh";
+print false and "uh oh";

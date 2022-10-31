@@ -22,3 +22,7 @@ pub fn create_or_die(allocator: std.mem.Allocator, comptime T: type) *T {
         std.process.exit(1);
     };
 }
+
+pub fn read_short(bytes: [2]u8) u16 {
+    return @intCast(u16, bytes[0]) << 8 | bytes[1];
+}
