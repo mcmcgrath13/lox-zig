@@ -15,7 +15,7 @@ const Value = @import("value.zig").Value;
 
 const obj = @import("object.zig");
 const Obj = obj.Obj;
-const alloc_string = obj.alloc_string;
+const new_string = obj.new_string;
 
 const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
 
@@ -229,10 +229,11 @@ pub const Compiler = struct {
     }
 
     fn string(self: *Compiler, _: bool) void {
-        var object = alloc_string(
+        var object = new_string(
             self.strings,
             self.parser.previous.start[1 .. self.parser.previous.length - 1],
             self.allocator,
+            false,
         );
         self.emit_constant(Value.obj(object, self.objects));
     }
@@ -469,10 +470,11 @@ pub const Compiler = struct {
     }
 
     fn identifier_constant(self: *Compiler, token: Token) u8 {
-        return self.make_constant(Value.obj(alloc_string(
+        return self.make_constant(Value.obj(new_string(
             self.strings,
             token.start[0..token.length],
             self.allocator,
+            false,
         ), self.objects));
     }
 

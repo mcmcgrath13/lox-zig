@@ -15,7 +15,7 @@ const disassemble_instruction = @import("debug.zig").disassemble_instruction;
 
 const obj = @import("object.zig");
 const Obj = obj.Obj;
-const take_string = obj.take_string;
+const new_string = obj.new_string;
 const ObjString = obj.ObjString;
 const ObjStringContext = obj.ObjStringContext;
 
@@ -281,7 +281,7 @@ pub const VM = struct {
             return InterpretError.runtime;
         };
         self.push(
-            Value.obj(take_string(&self.strings, data, self.allocator), &self.objects),
+            Value.obj(new_string(&self.strings, data, self.allocator, true), &self.objects),
         );
     }
 

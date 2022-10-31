@@ -2,13 +2,20 @@ const std = @import("std");
 
 const common = @import("common.zig");
 
+const Chunk = @import("chunk.zig").Chunk;
+
 const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
 
 pub const ObjType = union(enum) {
     string: *ObjString,
+    function: *ObjFunction,
 
     pub fn string(obj: *ObjString) ObjType {
         return ObjType{ .string = obj };
+    }
+
+    pub fn function(obj: *ObjFunction) ObjType {
+        return ObjType{ .function = obj };
     }
 
     pub fn deinit(self: *ObjType, allocator: std.mem.Allocator) void {
@@ -19,6 +26,10 @@ pub const ObjType = union(enum) {
                     self.string.deinit(allocator);
                     allocator.destroy(self.string);
                 }
+            },
+            .function => {
+                self.function.deinit(allocator);
+                allocator.destroy(self.function);
             },
         }
     }
@@ -42,6 +53,13 @@ pub const Obj = struct {
                 .string => {
                     return self.t.string == other.t.string;
                 },
+                else => return false,
+            },
+            .function => switch (other.t) {
+                .function => {
+                    return self.t.function == other.t.function;
+                },
+                else => return false,
             },
         }
     }
@@ -49,10 +67,25 @@ pub const Obj = struct {
     pub fn as_string(self: *Obj) *ObjString {
         switch (self.t) {
             .string => return self.t.string,
+            else => unreachable,
         }
     }
 };
 
+pub fn alloc_obj(objt: ObjType, allocator: std.mem.Allocator) *Obj {
+    var obj = common.create_or_die(allocator, Obj);
+    obj.* = Obj.init(objt);
+    return obj;
+}
+
+pub fn print_obj(obj: *Obj) void {
+    switch (obj.t) {
+        .string => std.debug.print("'{s}'", .{obj.t.string.data}),
+        .function => std.debug.print("<fn {s}>", .{obj.t.function.name.data}),
+    }
+}
+
+// ======== OBJ STRING ==========
 pub const ObjString = struct {
     data: []const u8,
     refs: usize = 1,
@@ -86,17 +119,11 @@ pub const ObjStringContext = struct {
     }
 };
 
-pub fn alloc_obj(objt: ObjType, allocator: std.mem.Allocator) *Obj {
-    var obj = common.create_or_die(allocator, Obj);
-    obj.* = Obj.init(objt);
-    return obj;
-}
-
 fn get_or_put_interned_string(
     strings: *ObjStringHashMap,
     new_objstr: *ObjString,
     allocator: std.mem.Allocator,
-) *Obj {
+) *ObjString {
     // new_objstr is a placeholder for the results of the if
     var objstr: *ObjString = new_objstr;
     if (strings.getKey(new_objstr)) |interned_objstr| {
@@ -112,8 +139,12 @@ fn get_or_put_interned_string(
         };
     }
 
-    var objt = ObjType.string(objstr);
+    return objstr;
+}
 
+pub fn new_string(strings: *ObjStringHashMap, string: []const u8, allocator: std.mem.Allocator, take: bool) *Obj {
+    var objstr = if (take) take_string(strings, string, allocator) else alloc_string(strings, string, allocator);
+    var objt = ObjType.string(objstr);
     return alloc_obj(objt, allocator);
 }
 
@@ -121,7 +152,7 @@ pub fn alloc_string(
     strings: *ObjStringHashMap,
     string: []const u8,
     allocator: std.mem.Allocator,
-) *Obj {
+) *ObjString {
     var new_objstr = ObjString.init(string, allocator);
     return get_or_put_interned_string(strings, &new_objstr, allocator);
 }
@@ -130,13 +161,41 @@ pub fn take_string(
     strings: *ObjStringHashMap,
     data: []const u8,
     allocator: std.mem.Allocator,
-) *Obj {
+) *ObjString {
     var new_objstr = ObjString.take(data);
     return get_or_put_interned_string(strings, &new_objstr, allocator);
 }
 
-pub fn print_obj(obj: *Obj) void {
-    switch (obj.t) {
-        .string => std.debug.print("'{s}'", .{obj.t.string.data}),
+// ========= OBJ FUNCTION =======
+const ObjFunction = struct {
+    arity: u8,
+    chunk: Chunk,
+    name: *ObjString,
+
+    pub fn init(
+        strings: *ObjStringHashMap,
+        name: []const u8,
+        arity: u8,
+        allocator: std.mem.Allocator,
+    ) ObjFunction {
+        const chunk = Chunk.init(allocator);
+        const name_objstr = alloc_string(strings, name, allocator);
+        return .{ .arity = arity, .chunk = chunk, .name = name_objstr };
     }
+
+    pub fn deinit(self: *ObjFunction, _: std.mem.Allocator) void {
+        self.chunk.deinit();
+    }
+};
+
+pub fn new_function(
+    strings: *ObjStringHashMap,
+    name: []const u8,
+    arity: u8,
+    allocator: std.mem.Allocator,
+) *Obj {
+    var objfunc = common.create_or_die(ObjFunction, allocator);
+    objfunc.* = ObjFunction.init(strings, name, arity, allocator);
+    var objt = ObjType.function(objfunc);
+    return alloc_obj(objt, allocator);
 }

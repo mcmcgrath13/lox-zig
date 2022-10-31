@@ -85,7 +85,7 @@ pub const Value = union(enum) {
         return switch (self) {
             .val_obj => switch (self.val_obj.t) {
                 .string => true,
-                // else => false,
+                else => false,
             },
             else => false,
         };
