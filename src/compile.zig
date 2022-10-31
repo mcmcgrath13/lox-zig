@@ -22,6 +22,8 @@ const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
 const compile_err = error.CompileFailed;
 const local_not_found = error.LocalNotFound;
 
+const PLACEHOLDER_BYTE: u8 = 0xff;
+
 const Precedence = enum(u8) {
     none,
     assignment, // =
@@ -187,6 +189,8 @@ pub const Compiler = struct {
     fn statement(self: *Compiler) void {
         if (self.parser.match(TokenType.print)) {
             self.print_statement();
+        } else if (self.parser.match(TokenType.cf_if)) {
+            self.if_statement();
         } else if (self.parser.match(TokenType.left_brace)) {
             self.begin_scope();
             self.block();
@@ -298,6 +302,27 @@ pub const Compiler = struct {
         self.expression();
         self.parser.consume(TokenType.semicolon, "expect ';' after value");
         self.emit_opcode(OpCode.print);
+    }
+
+    fn if_statement(self: *Compiler) void {
+        self.parser.consume(TokenType.left_paren, "expect '(' after if");
+        self.expression();
+        self.parser.consume(TokenType.right_paren, "expect ')' after if condition");
+
+        const then_jump = self.emit_jump(OpCode.jump_if_false);
+        self.emit_opcode(OpCode.pop);
+
+        self.statement();
+        const else_jump = self.emit_jump(OpCode.jump);
+        self.emit_opcode(OpCode.pop);
+
+        self.patch_jump(then_jump);
+
+        if (self.parser.match(TokenType.cf_else)) {
+            self.statement();
+        }
+
+        self.patch_jump(else_jump);
     }
 
     fn expression_statement(self: *Compiler) void {
@@ -423,6 +448,25 @@ pub const Compiler = struct {
         }
 
         return @intCast(u8, constant_idx);
+    }
+
+    fn emit_jump(self: *Compiler, op: OpCode) usize {
+        self.emit_opcode(op);
+        self.emit_byte(PLACEHOLDER_BYTE);
+        self.emit_byte(PLACEHOLDER_BYTE);
+        return self.current_chunk.code.items.len - 2;
+    }
+
+    fn patch_jump(self: *Compiler, offset: usize) void {
+        // account for bytes containing the jump value
+        const jump = self.current_chunk.code.items.len - (offset + 2);
+
+        if (jump > std.math.maxInt(u16)) {
+            self.parser.error_at_previous("too much code to jump over");
+        }
+
+        self.current_chunk.code.items[offset] = @intCast(u8, jump >> 8) & PLACEHOLDER_BYTE;
+        self.current_chunk.code.items[offset + 1] = @intCast(u8, jump) & PLACEHOLDER_BYTE;
     }
 
     // helpers for handling scope

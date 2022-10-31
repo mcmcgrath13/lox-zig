@@ -19,6 +19,8 @@ const take_string = obj.take_string;
 const ObjString = obj.ObjString;
 const ObjStringContext = obj.ObjStringContext;
 
+const common = @import("common.zig");
+
 const STACK_MAX = 256;
 
 pub const ObjStringHashMap = HashMap(
@@ -173,6 +175,16 @@ pub const VM = struct {
                     const idx = self.read_byte();
                     self.stack[idx] = self.peek(0);
                 },
+                .jump_if_false => {
+                    const jump = self.read_short();
+                    if (self.peek(0).is_falsey()) {
+                        self.ip.? += jump;
+                    }
+                },
+                .jump => {
+                    const jump = self.read_short();
+                    self.ip.? += jump;
+                },
                 ._return => {
                     return;
                 },
@@ -233,6 +245,10 @@ pub const VM = struct {
 
     fn read_constant(self: *VM) Value {
         return self.chunk.?.constants.values.items[self.read_byte()];
+    }
+
+    fn read_short(self: *VM) u16 {
+        return common.read_short(.{ self.read_byte(), self.read_byte() });
     }
 
     fn binary_op(

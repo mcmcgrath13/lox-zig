@@ -4,6 +4,8 @@ const Chunk = chunk.Chunk;
 const OpCode = chunk.OpCode;
 const print_value = @import("value.zig").print_value;
 
+const read_short = @import("common.zig").read_short;
+
 pub fn disassemble_chunk(c: *Chunk, name: []const u8) void {
     std.debug.print("==={s}===\n", .{name});
 
@@ -31,6 +33,8 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         .set_global => constant_instruction("SET_GLOBAL", c, offset),
         .get_local => byte_instruction("GET_LOCAL", c, offset),
         .set_local => byte_instruction("SET_LOCAL", c, offset),
+        .jump_if_false => jump_instruction("JUMP_IF_FALSE", true, c, offset),
+        .jump => jump_instruction("JUMP", true, c, offset),
         ._return => simple_instruction("RETURN", offset),
         .print => simple_instruction("PRINT", offset),
         .pop => simple_instruction("POP", offset),
@@ -75,4 +79,16 @@ fn byte_instruction(name: []const u8, c: *Chunk, offset: usize) usize {
     const byte_idx: usize = c.code.items[offset + 1];
     std.debug.print("{s: <16} {d: >4}\n", .{ name, byte_idx });
     return offset + 2;
+}
+
+fn jump_instruction(
+    name: []const u8,
+    positive_jump: bool,
+    c: *Chunk,
+    offset: usize,
+) usize {
+    const jump_size = read_short(.{ c.code.items[offset + 1], c.code.items[offset + 2] });
+    const sign: i32 = if (positive_jump) 1 else -1;
+    std.debug.print("{s: <16} {d: >4} -> {d}\n", .{ name, offset, @intCast(i32, offset + 3) + sign * jump_size });
+    return offset + 3;
 }
