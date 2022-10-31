@@ -185,6 +185,10 @@ pub const VM = struct {
                     const jump = self.read_short();
                     self.ip.? += jump;
                 },
+                .loop => {
+                    const jump = self.read_short();
+                    self.ip.? -= jump;
+                },
                 ._return => {
                     return;
                 },

@@ -191,6 +191,8 @@ pub const Compiler = struct {
             self.print_statement();
         } else if (self.parser.match(TokenType.cf_if)) {
             self.if_statement();
+        } else if (self.parser.match(TokenType.cf_while)) {
+            self.while_statement();
         } else if (self.parser.match(TokenType.left_brace)) {
             self.begin_scope();
             self.block();
@@ -345,6 +347,25 @@ pub const Compiler = struct {
         self.patch_jump(else_jump);
     }
 
+    fn while_statement(self: *Compiler) void {
+        const loop_start = self.current_chunk.code.items.len;
+
+        self.parser.consume(TokenType.left_paren, "expect '(' after while");
+        self.expression();
+        self.parser.consume(
+            TokenType.right_paren,
+            "expect ')' after while condition",
+        );
+
+        const end_jump = self.emit_jump(OpCode.jump_if_false);
+        self.emit_opcode(OpCode.pop);
+        self.statement();
+        self.emit_loop(loop_start);
+
+        self.patch_jump(end_jump);
+        self.emit_opcode(OpCode.pop);
+    }
+
     fn expression_statement(self: *Compiler) void {
         self.expression();
         self.parser.consume(TokenType.semicolon, "expect ';' after expression");
@@ -487,6 +508,18 @@ pub const Compiler = struct {
 
         self.current_chunk.code.items[offset] = @intCast(u8, jump >> 8) & PLACEHOLDER_BYTE;
         self.current_chunk.code.items[offset + 1] = @intCast(u8, jump) & PLACEHOLDER_BYTE;
+    }
+
+    fn emit_loop(self: *Compiler, loop_start: usize) void {
+        self.emit_opcode(OpCode.loop);
+
+        const jump = self.current_chunk.length() - loop_start + 2;
+        if (jump > std.math.maxInt(u16)) {
+            self.parser.error_at_previous("too much code in loop");
+        }
+
+        self.emit_byte(@intCast(u8, jump >> 8) & PLACEHOLDER_BYTE);
+        self.emit_byte(@intCast(u8, jump) & PLACEHOLDER_BYTE);
     }
 
     // helpers for handling scope
