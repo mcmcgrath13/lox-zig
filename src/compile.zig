@@ -15,6 +15,8 @@ const Value = @import("value.zig").Value;
 
 const obj = @import("object.zig");
 const Obj = obj.Obj;
+const ObjFunction = obj.ObjFunction;
+const new_function = obj.new_function;
 const new_string = obj.new_string;
 
 const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
@@ -101,26 +103,33 @@ fn get_rule(t: TokenType) *const ParseRule {
 
 pub fn compile(
     source: []const u8,
-    chunk: *Chunk,
     allocator: std.mem.Allocator,
     debug: bool,
     objects: *?*Obj,
     strings: *ObjStringHashMap,
-) !void {
+) !*Obj {
     var scanner = Scanner.init(source);
     var parser = Parser.init(&scanner);
     parser.advance();
 
-    var compiler = Compiler{
-        .current_chunk = chunk,
-        .parser = &parser,
-        .allocator = allocator,
-        .debug = debug,
-        .objects = objects,
-        .strings = strings,
-    };
+    // create a full on Obj and add it to our obj linked list for memory
+    // tracking purposes, then pull out the actual function for the compiler
+    var function_obj = new_function(objects, allocator);
+    var function = function_obj.as_function();
+
+    var compiler = Compiler.init(
+        function,
+        FunctionType.script,
+        &parser,
+        allocator,
+        debug,
+        objects,
+        strings,
+    );
 
     try compiler.compile();
+
+    return function_obj;
 }
 
 const Local = struct {
@@ -128,17 +137,58 @@ const Local = struct {
     depth: ?u8 = null,
 };
 
+const FunctionType = enum {
+    function,
+    script,
+};
+
 pub const Compiler = struct {
-    current_chunk: *Chunk,
+    function: *ObjFunction,
+    function_type: FunctionType,
+
     parser: *Parser,
+
     allocator: std.mem.Allocator,
+
     debug: bool,
+
     objects: *?*Obj,
     strings: *ObjStringHashMap,
 
     locals: [std.math.maxInt(u8)]Local = undefined,
     local_count: u8 = 0,
     scope_depth: u8 = 0,
+
+    pub fn init(
+        function: *ObjFunction,
+        function_type: FunctionType,
+        parser: *Parser,
+        allocator: std.mem.Allocator,
+        debug: bool,
+        objects: *?*Obj,
+        strings: *ObjStringHashMap,
+    ) Compiler {
+        var compiler = Compiler{
+            .function = function,
+            .function_type = function_type,
+            .parser = parser,
+            .allocator = allocator,
+            .debug = debug,
+            .objects = objects,
+            .strings = strings,
+        };
+
+        // reserve the first local slot for compiler use
+        compiler.add_local(.{
+            .t = TokenType.nil,
+            .start = "",
+            .length = 0,
+            .line = 0,
+        });
+        compiler.mark_initialized();
+
+        return compiler;
+    }
 
     pub fn compile(self: *Compiler) !void {
         while (!self.parser.match(TokenType.eof)) {
@@ -147,6 +197,10 @@ pub const Compiler = struct {
         self.end();
 
         if (self.parser.had_error) return compile_err;
+    }
+
+    pub fn current_chunk(self: *Compiler) *Chunk {
+        return &self.function.chunk;
     }
 
     fn parse_precedence(self: *Compiler, precedence: Precedence) void {
@@ -232,10 +286,11 @@ pub const Compiler = struct {
         var object = new_string(
             self.strings,
             self.parser.previous.start[1 .. self.parser.previous.length - 1],
+            self.objects,
             self.allocator,
             false,
         );
-        self.emit_constant(Value.obj(object, self.objects));
+        self.emit_constant(Value.obj(object));
     }
 
     fn variable(self: *Compiler, can_assign: bool) void {
@@ -363,7 +418,7 @@ pub const Compiler = struct {
     }
 
     fn while_statement(self: *Compiler) void {
-        const loop_start = self.current_chunk.length();
+        const loop_start = self.current_chunk().length();
 
         self.parser.consume(TokenType.left_paren, "expect '(' after while");
         self.expression();
@@ -391,7 +446,7 @@ pub const Compiler = struct {
             self.expression_statement();
         }
 
-        var loop_start = self.current_chunk.length();
+        var loop_start = self.current_chunk().length();
         var exit_jump: ?usize = null;
 
         if (!self.parser.match(TokenType.semicolon)) {
@@ -407,7 +462,7 @@ pub const Compiler = struct {
 
         if (!self.parser.match(TokenType.right_paren)) {
             const body_jump = self.emit_jump(OpCode.jump);
-            const incr_start = self.current_chunk.length();
+            const incr_start = self.current_chunk().length();
             self.expression();
             self.emit_opcode(OpCode.pop);
             self.parser.consume(
@@ -473,9 +528,10 @@ pub const Compiler = struct {
         return self.make_constant(Value.obj(new_string(
             self.strings,
             token.start[0..token.length],
+            self.objects,
             self.allocator,
             false,
-        ), self.objects));
+        )));
     }
 
     fn declare_variable(self: *Compiler) void {
@@ -528,7 +584,7 @@ pub const Compiler = struct {
 
     // Writing Byte Code to chunk helper methods
     fn emit_byte(self: *Compiler, byte: u8) void {
-        self.current_chunk.write(byte, self.parser.current.line);
+        self.current_chunk().write(byte, self.parser.current.line);
     }
 
     fn emit_opcode(self: *Compiler, op: OpCode) void {
@@ -551,7 +607,7 @@ pub const Compiler = struct {
     }
 
     fn make_constant(self: *Compiler, value: Value) u8 {
-        const constant_idx = self.current_chunk.add_constant(value);
+        const constant_idx = self.current_chunk().add_constant(value);
         if (constant_idx > std.math.maxInt(u8)) {
             self.parser.error_at_previous("too many constants in one chunk");
             return 0;
@@ -564,25 +620,25 @@ pub const Compiler = struct {
         self.emit_opcode(op);
         self.emit_byte(HIGH_BYTE);
         self.emit_byte(HIGH_BYTE);
-        return self.current_chunk.length() - 2;
+        return self.current_chunk().length() - 2;
     }
 
     fn patch_jump(self: *Compiler, offset: usize) void {
         // account for bytes containing the jump value
-        const jump = self.current_chunk.length() - (offset + 2);
+        const jump = self.current_chunk().length() - (offset + 2);
 
         if (jump > std.math.maxInt(u16)) {
             self.parser.error_at_previous("too much code to jump over");
         }
 
-        self.current_chunk.code.items[offset] = @intCast(u8, jump >> 8) & HIGH_BYTE;
-        self.current_chunk.code.items[offset + 1] = @intCast(u8, jump) & HIGH_BYTE;
+        self.current_chunk().code.items[offset] = @intCast(u8, jump >> 8) & HIGH_BYTE;
+        self.current_chunk().code.items[offset + 1] = @intCast(u8, jump) & HIGH_BYTE;
     }
 
     fn emit_loop(self: *Compiler, loop_start: usize) void {
         self.emit_opcode(OpCode.loop);
 
-        const jump = self.current_chunk.length() - loop_start + 2;
+        const jump = self.current_chunk().length() - loop_start + 2;
         if (jump > std.math.maxInt(u16)) {
             self.parser.error_at_previous("too much code in loop");
         }
@@ -608,7 +664,7 @@ pub const Compiler = struct {
     fn end(self: *Compiler) void {
         self.emit_opcode(OpCode._return);
         if (self.debug and !self.parser.had_error) {
-            disassemble_chunk(self.current_chunk, "code");
+            disassemble_chunk(self.current_chunk(), self.function);
         }
     }
 };

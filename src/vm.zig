@@ -7,7 +7,6 @@ const OpCode = chnk.OpCode;
 
 const vlu = @import("value.zig");
 const Value = vlu.Value;
-const print_value = vlu.print_value;
 
 const compile = @import("compile.zig").compile;
 
@@ -15,13 +14,15 @@ const disassemble_instruction = @import("debug.zig").disassemble_instruction;
 
 const obj = @import("object.zig");
 const Obj = obj.Obj;
+const ObjFunction = obj.ObjFunction;
 const new_string = obj.new_string;
 const ObjString = obj.ObjString;
 const ObjStringContext = obj.ObjStringContext;
 
 const common = @import("common.zig");
 
-const STACK_MAX = 256;
+const FRAME_MAX = 64;
+const STACK_MAX = FRAME_MAX * std.math.maxInt(u8);
 
 pub const ObjStringHashMap = HashMap(
     *ObjString,
@@ -37,9 +38,34 @@ pub const InterpretError = error{
     runtime,
 };
 
+const CallFrame = struct {
+    function: *ObjFunction,
+    ip: [*]u8,
+    slots: [*]Value,
+
+    fn init(function: *ObjFunction, slots: [*]Value) CallFrame {
+        return .{ .function = function, .ip = function.chunk.code.items.ptr, .slots = slots };
+    }
+
+    fn read_byte(self: *CallFrame) u8 {
+        const byte = self.ip[0];
+        self.ip = self.ip + 1;
+        return byte;
+    }
+
+    fn read_constant(self: *CallFrame) Value {
+        return self.function.chunk.constants.values.items[self.read_byte()];
+    }
+
+    fn read_short(self: *CallFrame) u16 {
+        return common.read_short(.{ self.read_byte(), self.read_byte() });
+    }
+};
+
 pub const VM = struct {
-    chunk: ?*Chunk = null,
-    ip: ?[*]u8 = null,
+    frames: [FRAME_MAX]CallFrame = undefined,
+    frame_count: u8 = 0,
+
     allocator: std.mem.Allocator,
 
     // TODO: revisit if this should really use pointer math
@@ -99,12 +125,8 @@ pub const VM = struct {
     }
 
     pub fn interpret(self: *VM, source: []const u8) InterpretError!void {
-        var chunk = Chunk.init(self.allocator);
-        defer chunk.deinit();
-
-        compile(
+        var function_obj = compile(
             source,
-            &chunk,
             self.allocator,
             self.debug,
             &self.objects,
@@ -112,13 +134,20 @@ pub const VM = struct {
         ) catch {
             return InterpretError.compile;
         };
-        self.chunk = &chunk;
-        self.ip = chunk.code.items.ptr;
+
+        self.push(Value.obj(function_obj));
+
+        var frame = &self.frames[self.frame_count];
+        self.frame_count += 1;
+
+        frame.* = CallFrame.init(function_obj.as_function(), &self.stack);
 
         return self.run();
     }
 
     fn run(self: *VM) InterpretError!void {
+        var frame = &self.frames[self.frame_count - 1];
+
         while (true) {
             if (self.debug) {
                 // print stack
@@ -127,22 +156,20 @@ pub const VM = struct {
                     if (i == self.stack_top) {
                         break;
                     }
-                    std.debug.print("[", .{});
-                    print_value(value);
-                    std.debug.print("]", .{});
+                    std.debug.print("[{}]", .{value});
                 }
                 std.debug.print("\n", .{});
 
-                _ = disassemble_instruction(self.chunk.?, @ptrToInt(self.ip.?) - @ptrToInt(self.chunk.?.code.items.ptr));
+                _ = disassemble_instruction(&frame.function.chunk, @ptrToInt(frame.ip) - @ptrToInt(frame.function.chunk.code.items.ptr));
             }
-            const instruction = self.read_byte();
+            const instruction = frame.read_byte();
             try switch (@intToEnum(OpCode, instruction)) {
                 .constant => {
-                    const constant = self.read_constant();
+                    const constant = frame.read_constant();
                     self.push(constant);
                 },
                 .define_global => {
-                    var name = self.read_constant().as_obj().as_string();
+                    var name = frame.read_constant().as_obj().as_string();
                     self.globals.put(name, self.peek(0)) catch {
                         std.debug.print("Out of memory!\n", .{});
                         std.process.exit(1);
@@ -150,51 +177,50 @@ pub const VM = struct {
                     _ = self.pop();
                 },
                 .get_global => {
-                    var name = self.read_constant().as_obj().as_string();
+                    var name = frame.read_constant().as_obj().as_string();
                     if (self.globals.get(name)) |value| {
                         self.push(value);
                     } else {
-                        self.runtime_error("undefined variable '{s}'", .{name.data});
+                        self.runtime_error(frame, "undefined variable '{s}'", .{name.data});
                         return InterpretError.runtime;
                     }
                 },
                 .set_global => {
-                    var name = self.read_constant().as_obj().as_string();
+                    var name = frame.read_constant().as_obj().as_string();
                     if (self.globals.getPtr(name)) |value_ptr| {
                         value_ptr.* = self.peek(0);
                     } else {
-                        self.runtime_error("can't assign to undefined variable '{s}'", .{name.data});
+                        self.runtime_error(frame, "can't assign to undefined variable '{s}'", .{name.data});
                         return InterpretError.runtime;
                     }
                 },
                 .get_local => {
-                    const idx = self.read_byte();
-                    self.push(self.stack[idx]);
+                    const idx = frame.read_byte();
+                    self.push(frame.slots[idx]);
                 },
                 .set_local => {
-                    const idx = self.read_byte();
-                    self.stack[idx] = self.peek(0);
+                    const idx = frame.read_byte();
+                    frame.slots[idx] = self.peek(0);
                 },
                 .jump_if_false => {
-                    const jump = self.read_short();
+                    const jump = frame.read_short();
                     if (self.peek(0).is_falsey()) {
-                        self.ip.? += jump;
+                        frame.ip += jump;
                     }
                 },
                 .jump => {
-                    const jump = self.read_short();
-                    self.ip.? += jump;
+                    const jump = frame.read_short();
+                    frame.ip += jump;
                 },
                 .loop => {
-                    const jump = self.read_short();
-                    self.ip.? -= jump;
+                    const jump = frame.read_short();
+                    frame.ip -= jump;
                 },
                 ._return => {
                     return;
                 },
                 .print => {
-                    print_value(self.pop());
-                    std.debug.print("\n", .{});
+                    std.debug.print("{}\n", .{self.pop()});
                 },
                 .pop => {
                     _ = self.pop();
@@ -209,7 +235,7 @@ pub const VM = struct {
                 .not => self.push(Value.boolean(self.pop().is_falsey())),
                 .negate => {
                     if (!self.peek(0).is_number()) {
-                        self.runtime_error("operand must be a number: found {s}", .{print_value(self.peek(0))});
+                        self.runtime_error(frame, "operand must be a number: found {s}", .{self.peek(0)});
                         return InterpretError.runtime;
                     }
                     self.push(Value.number(-1 * self.pop().as_number()));
@@ -218,22 +244,22 @@ pub const VM = struct {
                 //binary
                 .add => {
                     if (self.peek(0).is_string() and self.peek(1).is_string()) {
-                        try self.concatenate();
+                        try self.concatenate(frame);
                     } else {
                         // TODO: fix error message
-                        try self.binary_op(f64, Value.number, add);
+                        try self.binary_op(frame, f64, Value.number, add);
                     }
                 },
-                .divide => try self.binary_op(f64, Value.number, divide),
-                .multiply => try self.binary_op(f64, Value.number, multiply),
-                .subtract => try self.binary_op(f64, Value.number, subtract),
+                .divide => try self.binary_op(frame, f64, Value.number, divide),
+                .multiply => try self.binary_op(frame, f64, Value.number, multiply),
+                .subtract => try self.binary_op(frame, f64, Value.number, subtract),
                 .equal => {
                     const right: Value = self.pop();
                     const left: Value = self.pop();
                     self.push(Value.boolean(left.equals(right)));
                 },
-                .less => self.binary_op(bool, Value.boolean, less),
-                .greater => self.binary_op(bool, Value.boolean, greater),
+                .less => self.binary_op(frame, bool, Value.boolean, less),
+                .greater => self.binary_op(frame, bool, Value.boolean, greater),
 
                 // fallthrough
                 _ => return InterpretError.runtime,
@@ -241,30 +267,18 @@ pub const VM = struct {
         }
     }
 
-    fn read_byte(self: *VM) u8 {
-        const byte = self.ip.?[0];
-        self.ip = self.ip.? + 1;
-        return byte;
-    }
-
-    fn read_constant(self: *VM) Value {
-        return self.chunk.?.constants.values.items[self.read_byte()];
-    }
-
-    fn read_short(self: *VM) u16 {
-        return common.read_short(.{ self.read_byte(), self.read_byte() });
-    }
-
     fn binary_op(
         self: *VM,
+        frame: *CallFrame,
         comptime R: type,
         value_type: (fn (R) Value),
         op: (fn (f64, f64) R),
     ) InterpretError!void {
         if (!self.peek(0).is_number() or !self.peek(1).is_number()) {
             self.runtime_error(
+                frame,
                 "operands must be numbers, found: {s} {s}",
-                .{ print_value(self.peek(0)), print_value(self.peek(1)) },
+                .{ self.peek(0), self.peek(1) },
             );
             return InterpretError.runtime;
         }
@@ -273,27 +287,34 @@ pub const VM = struct {
         self.push(value_type(op(left, right)));
     }
 
-    fn concatenate(self: *VM) InterpretError!void {
+    fn concatenate(self: *VM, frame: *CallFrame) InterpretError!void {
         const b: []const u8 = self.pop().as_obj().as_string().data;
         const a: []const u8 = self.pop().as_obj().as_string().data;
         const data = std.mem.concat(self.allocator, u8, &[_][]const u8{ a, b }) catch {
-            self.runtime_error("out of memory", .{});
+            self.runtime_error(frame, "out of memory", .{});
             return InterpretError.runtime;
         };
         self.push(
-            Value.obj(new_string(&self.strings, data, self.allocator, true), &self.objects),
+            Value.obj(new_string(
+                &self.strings,
+                data,
+                &self.objects,
+                self.allocator,
+                true,
+            )),
         );
     }
 
     fn runtime_error(
         self: *VM,
+        frame: *CallFrame,
         comptime format: []const u8,
         args: anytype,
     ) void {
         std.debug.print(format, args);
 
-        const instruction: usize = @ptrToInt(self.ip.?) - @ptrToInt(self.chunk.?.code.items.ptr) - 1;
-        const line: usize = self.chunk.?.lines.items[instruction];
+        const instruction: usize = @ptrToInt(frame.ip) - @ptrToInt(frame.function.chunk.code.items.ptr) - 1;
+        const line: usize = frame.function.chunk.lines.items[instruction];
         std.debug.print("[line {d}] in script\n", .{line});
         self.reset_stack();
     }

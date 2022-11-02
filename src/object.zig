@@ -20,20 +20,23 @@ pub const ObjType = union(enum) {
 
     pub fn deinit(self: *ObjType, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .string => {
-                self.string.refs -= 1;
-                if (self.string.refs == 0) {
-                    self.string.deinit(allocator);
-                    allocator.destroy(self.string);
-                }
-            },
+            .string => free_objstr(self.string, allocator),
             .function => {
+                if (self.function.name) |name| free_objstr(name, allocator);
                 self.function.deinit(allocator);
                 allocator.destroy(self.function);
             },
         }
     }
 };
+
+fn free_objstr(objstr: *ObjString, allocator: std.mem.Allocator) void {
+    objstr.refs -= 1;
+    if (objstr.refs == 0) {
+        objstr.deinit(allocator);
+        allocator.destroy(objstr);
+    }
+}
 
 pub const Obj = struct {
     t: ObjType,
@@ -45,6 +48,13 @@ pub const Obj = struct {
 
     pub fn deinit(self: *Obj, allocator: std.mem.Allocator) void {
         self.t.deinit(allocator);
+    }
+
+    fn update_next(obj: *Obj, head: *?*Obj) void {
+        if (head.*) |o| {
+            obj.next = o;
+        }
+        head.* = obj;
     }
 
     pub fn equals(self: *Obj, other: *Obj) bool {
@@ -70,19 +80,39 @@ pub const Obj = struct {
             else => unreachable,
         }
     }
+
+    pub fn as_function(self: *Obj) *ObjFunction {
+        switch (self.t) {
+            .function => return self.t.function,
+            else => unreachable,
+        }
+    }
+
+    pub fn format(
+        self: Obj,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        switch (self.t) {
+            .string => try writer.print("\"{s}\"", .{self.t.string}),
+            .function => try writer.print("{}", .{self.t.function}),
+        }
+    }
 };
 
-pub fn alloc_obj(objt: ObjType, allocator: std.mem.Allocator) *Obj {
+pub fn alloc_obj(
+    objt: ObjType,
+    objects: *?*Obj,
+    allocator: std.mem.Allocator,
+) *Obj {
     var obj = common.create_or_die(allocator, Obj);
     obj.* = Obj.init(objt);
+    obj.update_next(objects);
     return obj;
-}
-
-pub fn print_obj(obj: *Obj) void {
-    switch (obj.t) {
-        .string => std.debug.print("'{s}'", .{obj.t.string.data}),
-        .function => std.debug.print("<fn {s}>", .{obj.t.function.name.data}),
-    }
 }
 
 // ======== OBJ STRING ==========
@@ -102,6 +132,18 @@ pub const ObjString = struct {
 
     pub fn deinit(self: *ObjString, allocator: std.mem.Allocator) void {
         allocator.free(self.data);
+    }
+
+    pub fn format(
+        self: ObjString,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        try writer.print("{s}", .{self.data});
     }
 };
 
@@ -142,10 +184,16 @@ fn get_or_put_interned_string(
     return objstr;
 }
 
-pub fn new_string(strings: *ObjStringHashMap, string: []const u8, allocator: std.mem.Allocator, take: bool) *Obj {
+pub fn new_string(
+    strings: *ObjStringHashMap,
+    string: []const u8,
+    objects: *?*Obj,
+    allocator: std.mem.Allocator,
+    take: bool,
+) *Obj {
     var objstr = if (take) take_string(strings, string, allocator) else alloc_string(strings, string, allocator);
     var objt = ObjType.string(objstr);
-    return alloc_obj(objt, allocator);
+    return alloc_obj(objt, objects, allocator);
 }
 
 pub fn alloc_string(
@@ -167,35 +215,45 @@ pub fn take_string(
 }
 
 // ========= OBJ FUNCTION =======
-const ObjFunction = struct {
-    arity: u8,
+pub const ObjFunction = struct {
+    arity: u8 = 0,
     chunk: Chunk,
-    name: *ObjString,
+    name: ?*ObjString = null,
 
     pub fn init(
-        strings: *ObjStringHashMap,
-        name: []const u8,
-        arity: u8,
         allocator: std.mem.Allocator,
     ) ObjFunction {
-        const chunk = Chunk.init(allocator);
-        const name_objstr = alloc_string(strings, name, allocator);
-        return .{ .arity = arity, .chunk = chunk, .name = name_objstr };
+        var chunk = Chunk.init(allocator);
+        return .{ .chunk = chunk };
     }
 
     pub fn deinit(self: *ObjFunction, _: std.mem.Allocator) void {
         self.chunk.deinit();
     }
+
+    pub fn format(
+        self: ObjFunction,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        if (self.name) |name| {
+            try writer.print("<fn {s}>", .{name});
+        } else {
+            try writer.print("<script>", .{});
+        }
+    }
 };
 
 pub fn new_function(
-    strings: *ObjStringHashMap,
-    name: []const u8,
-    arity: u8,
+    objects: *?*Obj,
     allocator: std.mem.Allocator,
 ) *Obj {
-    var objfunc = common.create_or_die(ObjFunction, allocator);
-    objfunc.* = ObjFunction.init(strings, name, arity, allocator);
+    var objfunc = common.create_or_die(allocator, ObjFunction);
+    objfunc.* = ObjFunction.init(allocator);
     var objt = ObjType.function(objfunc);
-    return alloc_obj(objt, allocator);
+    return alloc_obj(objt, objects, allocator);
 }
