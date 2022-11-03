@@ -18,6 +18,8 @@ const ObjFunction = obj.ObjFunction;
 const new_string = obj.new_string;
 const ObjString = obj.ObjString;
 const ObjStringContext = obj.ObjStringContext;
+const new_native = obj.new_native;
+const NativeFn = obj.NativeFn;
 
 const common = @import("common.zig");
 
@@ -82,12 +84,14 @@ pub const VM = struct {
     pub fn init(debug: bool, allocator: std.mem.Allocator) VM {
         const strings = ObjStringHashMap.init(allocator);
         const globals = VariableHashMap.init(allocator);
-        return VM{
+        var vm = VM{
             .debug = debug,
             .allocator = allocator,
             .strings = strings,
             .globals = globals,
         };
+        vm.define_native("clock", clock_native);
+        return vm;
     }
 
     pub fn deinit(self: *VM) void {
@@ -347,11 +351,47 @@ pub const VM = struct {
                 .function => {
                     return self.call(obj_val.as_function(), arg_count);
                 },
+                .native => {
+                    const native = obj_val.as_native();
+                    var stack_ptr: [*]Value = &self.stack;
+                    const result = native.function(
+                        arg_count,
+                        stack_ptr + self.stack_top - arg_count,
+                    );
+                    self.stack_top -= arg_count;
+                    self.push(result);
+                    return;
+                },
                 else => {},
             }
         }
         self.runtime_error("can only call functions and classes\n", .{});
         return InterpretError.runtime;
+    }
+
+    fn define_native(
+        self: *VM,
+        name: []const u8,
+        function: NativeFn,
+    ) void {
+        self.push(Value.obj(new_string(
+            &self.strings,
+            name,
+            &self.objects,
+            self.allocator,
+            false,
+        )));
+        self.push(Value.obj(new_native(
+            function,
+            &self.objects,
+            self.allocator,
+        )));
+        self.globals.put(self.peek(1).as_obj().as_string(), self.peek(0)) catch {
+            std.debug.print("Out of memory!\n", .{});
+            std.process.exit(1);
+        };
+        _ = self.pop();
+        _ = self.pop();
     }
 
     fn runtime_error(
@@ -361,9 +401,9 @@ pub const VM = struct {
     ) void {
         std.debug.print(format, args);
 
-        var i = self.frame_count - 1;
+        var i = self.frame_count;
         while (i >= 0) : (i -= 1) {
-            const frame = self.frames[i];
+            const frame = self.frames[i - 1];
             const instruction: usize = @ptrToInt(frame.ip) - @ptrToInt(frame.function.chunk.code.items.ptr) - 1;
             const line: usize = frame.function.chunk.lines.items[instruction];
             std.debug.print("[line {d}] in {}\n", .{ line, frame.function });
@@ -396,4 +436,11 @@ fn less(left: f64, right: f64) bool {
 
 fn greater(left: f64, right: f64) bool {
     return left > right;
+}
+
+// ========= NATIVE FUNCTIONS =========
+fn clock_native(arg_count: u8, args: [*]Value) Value {
+    _ = arg_count;
+    _ = args;
+    return Value.number(@intToFloat(f64, std.time.timestamp()));
 }

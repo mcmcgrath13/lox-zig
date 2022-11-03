@@ -96,6 +96,16 @@ pub const Value = union(enum) {
         };
     }
 
+    pub fn is_native(self: Value) bool {
+        return switch (self) {
+            .val_obj => switch (self.val_obj.t) {
+                .native => true,
+                else => false,
+            },
+            else => false,
+        };
+    }
+
     pub fn is_falsey(self: Value) bool {
         return self.is_nil() or (self.is_boolean() and !self.as_boolean());
     }

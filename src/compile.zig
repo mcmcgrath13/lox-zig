@@ -643,9 +643,9 @@ pub const Compiler = struct {
 
         const token = self.parser.previous;
         if (self.local_count > 0) {
-            var i = self.local_count - 1;
-            while (i >= 0) : (i -= 1) {
-                var local: *Local = &self.locals[i];
+            var i = self.local_count;
+            while (i > 0) : (i -= 1) {
+                var local: *Local = &self.locals[i - 1];
                 if (local.depth != null and local.depth.? < self.scope_depth) break;
 
                 if (token.equals(local.token)) {

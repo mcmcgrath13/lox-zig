@@ -4,11 +4,14 @@ const common = @import("common.zig");
 
 const Chunk = @import("chunk.zig").Chunk;
 
+const Value = @import("value.zig").Value;
+
 const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
 
 pub const ObjType = union(enum) {
     string: *ObjString,
     function: *ObjFunction,
+    native: *ObjNative,
 
     pub fn string(obj: *ObjString) ObjType {
         return ObjType{ .string = obj };
@@ -18,6 +21,10 @@ pub const ObjType = union(enum) {
         return ObjType{ .function = obj };
     }
 
+    pub fn native(obj: *ObjNative) ObjType {
+        return ObjType{ .native = obj };
+    }
+
     pub fn deinit(self: *ObjType, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .string => free_objstr(self.string, allocator),
@@ -25,6 +32,9 @@ pub const ObjType = union(enum) {
                 if (self.function.name) |name| free_objstr(name, allocator);
                 self.function.deinit(allocator);
                 allocator.destroy(self.function);
+            },
+            .native => {
+                allocator.destroy(self.native);
             },
         }
     }
@@ -71,6 +81,12 @@ pub const Obj = struct {
                 },
                 else => return false,
             },
+            .native => switch (other.t) {
+                .native => {
+                    return self.t.native == other.t.native;
+                },
+                else => return false,
+            },
         }
     }
 
@@ -88,6 +104,13 @@ pub const Obj = struct {
         }
     }
 
+    pub fn as_native(self: *Obj) *ObjNative {
+        switch (self.t) {
+            .native => return self.t.native,
+            else => unreachable,
+        }
+    }
+
     pub fn format(
         self: Obj,
         comptime fmt: []const u8,
@@ -100,6 +123,7 @@ pub const Obj = struct {
         switch (self.t) {
             .string => try writer.print("\"{s}\"", .{self.t.string}),
             .function => try writer.print("{}", .{self.t.function}),
+            .native => try writer.print("{}", .{self.t.native}),
         }
     }
 };
@@ -255,5 +279,40 @@ pub fn new_function(
     var objfunc = common.create_or_die(allocator, ObjFunction);
     objfunc.* = ObjFunction.init(allocator);
     var objt = ObjType.function(objfunc);
+    return alloc_obj(objt, objects, allocator);
+}
+
+// ========= OBJ NATIVE =======
+pub const NativeFn = fn (arg_count: u8, args: [*]Value) Value;
+
+pub const ObjNative = struct {
+    function: NativeFn,
+
+    pub fn init(function: NativeFn) ObjNative {
+        return ObjNative{ .function = function };
+    }
+
+    pub fn format(
+        self: ObjNative,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = self;
+        _ = fmt;
+        _ = options;
+
+        try writer.print("<native fn>", .{});
+    }
+};
+
+pub fn new_native(
+    function: NativeFn,
+    objects: *?*Obj,
+    allocator: std.mem.Allocator,
+) *Obj {
+    var objnative = common.create_or_die(allocator, ObjNative);
+    objnative.* = ObjNative.init(function);
+    var objt = ObjType.native(objnative);
     return alloc_obj(objt, objects, allocator);
 }
