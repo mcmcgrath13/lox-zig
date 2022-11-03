@@ -19,6 +19,7 @@ pub const OpCode = enum(u8) {
     _return,
     print,
     pop,
+    call,
 
     // literals
     nil,

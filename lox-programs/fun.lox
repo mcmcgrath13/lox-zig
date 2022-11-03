@@ -3,3 +3,10 @@ fun areWeHavingItYet() {
 }
 
 print areWeHavingItYet;
+
+fun noReturn() {
+  print "Do stuff";
+  // No return here.
+}
+
+print noReturn(); // ???

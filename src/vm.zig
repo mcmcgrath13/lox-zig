@@ -41,10 +41,10 @@ pub const InterpretError = error{
 const CallFrame = struct {
     function: *ObjFunction,
     ip: [*]u8,
-    slots: [*]Value,
+    slots_start: usize,
 
-    fn init(function: *ObjFunction, slots: [*]Value) CallFrame {
-        return .{ .function = function, .ip = function.chunk.code.items.ptr, .slots = slots };
+    fn init(function: *ObjFunction, slots_start: usize) CallFrame {
+        return .{ .function = function, .ip = function.chunk.code.items.ptr, .slots_start = slots_start };
     }
 
     fn read_byte(self: *CallFrame) u8 {
@@ -110,6 +110,10 @@ pub const VM = struct {
         self.stack_top = 0;
     }
 
+    fn current_frame(self: *VM) *CallFrame {
+        return &self.frames[self.frame_count - 1];
+    }
+
     fn push(self: *VM, value: Value) void {
         self.stack[self.stack_top] = value;
         self.stack_top += 1;
@@ -124,6 +128,25 @@ pub const VM = struct {
         return self.stack[self.stack_top - 1 - distance];
     }
 
+    fn call(self: *VM, function: *ObjFunction, arg_count: u8) !void {
+        if (arg_count != function.arity) {
+            self.runtime_error(
+                "expected {d} arguments, but got {d}\n",
+                .{ function.arity, arg_count },
+            );
+        }
+
+        if (self.frame_count == FRAME_MAX) {
+            self.runtime_error("stack overflow\n", .{});
+            return InterpretError.runtime;
+        }
+
+        var frame = &self.frames[self.frame_count];
+        self.frame_count += 1;
+
+        frame.* = CallFrame.init(function, self.stack_top - arg_count - 1);
+    }
+
     pub fn interpret(self: *VM, source: []const u8) InterpretError!void {
         var function_obj = compile(
             source,
@@ -136,17 +159,13 @@ pub const VM = struct {
         };
 
         self.push(Value.obj(function_obj));
-
-        var frame = &self.frames[self.frame_count];
-        self.frame_count += 1;
-
-        frame.* = CallFrame.init(function_obj.as_function(), &self.stack);
+        try self.call(function_obj.as_function(), 0);
 
         return self.run();
     }
 
     fn run(self: *VM) InterpretError!void {
-        var frame = &self.frames[self.frame_count - 1];
+        var frame = self.current_frame();
 
         while (true) {
             if (self.debug) {
@@ -181,7 +200,7 @@ pub const VM = struct {
                     if (self.globals.get(name)) |value| {
                         self.push(value);
                     } else {
-                        self.runtime_error(frame, "undefined variable '{s}'", .{name.data});
+                        self.runtime_error("undefined variable '{s}'\n", .{name.data});
                         return InterpretError.runtime;
                     }
                 },
@@ -190,17 +209,17 @@ pub const VM = struct {
                     if (self.globals.getPtr(name)) |value_ptr| {
                         value_ptr.* = self.peek(0);
                     } else {
-                        self.runtime_error(frame, "can't assign to undefined variable '{s}'", .{name.data});
+                        self.runtime_error("can't assign to undefined variable '{s}'\n", .{name.data});
                         return InterpretError.runtime;
                     }
                 },
                 .get_local => {
                     const idx = frame.read_byte();
-                    self.push(frame.slots[idx]);
+                    self.push(self.stack[frame.slots_start + idx]);
                 },
                 .set_local => {
                     const idx = frame.read_byte();
-                    frame.slots[idx] = self.peek(0);
+                    self.stack[frame.slots_start + idx] = self.peek(0);
                 },
                 .jump_if_false => {
                     const jump = frame.read_short();
@@ -217,13 +236,27 @@ pub const VM = struct {
                     frame.ip -= jump;
                 },
                 ._return => {
-                    return;
+                    const result = self.pop();
+                    self.frame_count -= 1;
+                    if (self.frame_count == 0) {
+                        _ = self.pop();
+                        return;
+                    }
+
+                    self.stack_top = frame.slots_start;
+                    self.push(result);
+                    frame = self.current_frame();
                 },
                 .print => {
                     std.debug.print("{}\n", .{self.pop()});
                 },
                 .pop => {
                     _ = self.pop();
+                },
+                .call => {
+                    const arg_count = frame.read_byte();
+                    try self.call_value(self.peek(arg_count), arg_count);
+                    frame = self.current_frame();
                 },
 
                 // literals
@@ -235,7 +268,7 @@ pub const VM = struct {
                 .not => self.push(Value.boolean(self.pop().is_falsey())),
                 .negate => {
                     if (!self.peek(0).is_number()) {
-                        self.runtime_error(frame, "operand must be a number: found {s}", .{self.peek(0)});
+                        self.runtime_error("operand must be a number: found {s}\n", .{self.peek(0)});
                         return InterpretError.runtime;
                     }
                     self.push(Value.number(-1 * self.pop().as_number()));
@@ -244,22 +277,22 @@ pub const VM = struct {
                 //binary
                 .add => {
                     if (self.peek(0).is_string() and self.peek(1).is_string()) {
-                        try self.concatenate(frame);
+                        try self.concatenate();
                     } else {
                         // TODO: fix error message
-                        try self.binary_op(frame, f64, Value.number, add);
+                        try self.binary_op(f64, Value.number, add);
                     }
                 },
-                .divide => try self.binary_op(frame, f64, Value.number, divide),
-                .multiply => try self.binary_op(frame, f64, Value.number, multiply),
-                .subtract => try self.binary_op(frame, f64, Value.number, subtract),
+                .divide => try self.binary_op(f64, Value.number, divide),
+                .multiply => try self.binary_op(f64, Value.number, multiply),
+                .subtract => try self.binary_op(f64, Value.number, subtract),
                 .equal => {
                     const right: Value = self.pop();
                     const left: Value = self.pop();
                     self.push(Value.boolean(left.equals(right)));
                 },
-                .less => self.binary_op(frame, bool, Value.boolean, less),
-                .greater => self.binary_op(frame, bool, Value.boolean, greater),
+                .less => self.binary_op(bool, Value.boolean, less),
+                .greater => self.binary_op(bool, Value.boolean, greater),
 
                 // fallthrough
                 _ => return InterpretError.runtime,
@@ -269,15 +302,13 @@ pub const VM = struct {
 
     fn binary_op(
         self: *VM,
-        frame: *CallFrame,
         comptime R: type,
         value_type: (fn (R) Value),
         op: (fn (f64, f64) R),
     ) InterpretError!void {
         if (!self.peek(0).is_number() or !self.peek(1).is_number()) {
             self.runtime_error(
-                frame,
-                "operands must be numbers, found: {s} {s}",
+                "operands must be numbers, found: {s} {s}\n",
                 .{ self.peek(0), self.peek(1) },
             );
             return InterpretError.runtime;
@@ -287,11 +318,11 @@ pub const VM = struct {
         self.push(value_type(op(left, right)));
     }
 
-    fn concatenate(self: *VM, frame: *CallFrame) InterpretError!void {
+    fn concatenate(self: *VM) InterpretError!void {
         const b: []const u8 = self.pop().as_obj().as_string().data;
         const a: []const u8 = self.pop().as_obj().as_string().data;
         const data = std.mem.concat(self.allocator, u8, &[_][]const u8{ a, b }) catch {
-            self.runtime_error(frame, "out of memory", .{});
+            self.runtime_error("out of memory\n", .{});
             return InterpretError.runtime;
         };
         self.push(
@@ -305,17 +336,39 @@ pub const VM = struct {
         );
     }
 
+    fn call_value(
+        self: *VM,
+        callee: Value,
+        arg_count: u8,
+    ) !void {
+        if (callee.is_obj()) {
+            var obj_val = callee.as_obj();
+            switch (obj_val.t) {
+                .function => {
+                    return self.call(obj_val.as_function(), arg_count);
+                },
+                else => {},
+            }
+        }
+        self.runtime_error("can only call functions and classes\n", .{});
+        return InterpretError.runtime;
+    }
+
     fn runtime_error(
         self: *VM,
-        frame: *CallFrame,
         comptime format: []const u8,
         args: anytype,
     ) void {
         std.debug.print(format, args);
 
-        const instruction: usize = @ptrToInt(frame.ip) - @ptrToInt(frame.function.chunk.code.items.ptr) - 1;
-        const line: usize = frame.function.chunk.lines.items[instruction];
-        std.debug.print("[line {d}] in script\n", .{line});
+        var i = self.frame_count - 1;
+        while (i >= 0) : (i -= 1) {
+            const frame = self.frames[i];
+            const instruction: usize = @ptrToInt(frame.ip) - @ptrToInt(frame.function.chunk.code.items.ptr) - 1;
+            const line: usize = frame.function.chunk.lines.items[instruction];
+            std.debug.print("[line {d}] in {}\n", .{ line, frame.function });
+        }
+
         self.reset_stack();
     }
 };

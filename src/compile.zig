@@ -51,7 +51,7 @@ const ParseRule = struct {
 // order here must match order in scanner.zig TokenType so that indexing on the enum value works
 const RULES = [_]ParseRule{
     // Single-character tokens.
-    .{ .prefix = Compiler.grouping, .infix = null, .precedence = .none }, // left_paren,
+    .{ .prefix = Compiler.grouping, .infix = Compiler.call, .precedence = .call }, // left_paren,
     .{ .prefix = null, .infix = null, .precedence = .none }, // right_paren,
     .{ .prefix = null, .infix = null, .precedence = .none }, // left_brace,
     .{ .prefix = null, .infix = null, .precedence = .none }, // right_brace,
@@ -384,6 +384,11 @@ pub const Compiler = struct {
         }
     }
 
+    fn call(self: *Compiler, _: bool) void {
+        const arg_count = self.argument_list();
+        self.emit_compound(OpCode.call, arg_count);
+    }
+
     fn logical_and(self: *Compiler, _: bool) void {
         const end_jump = self.emit_jump(OpCode.jump_if_false);
         self.emit_opcode(OpCode.pop);
@@ -585,6 +590,28 @@ pub const Compiler = struct {
         self.emit_compound(OpCode.define_global, index);
     }
 
+    fn argument_list(self: *Compiler) u8 {
+        var count: u8 = 0;
+        if (!self.parser.check(TokenType.right_paren)) {
+            while (true) {
+                if (count == std.math.maxInt(u8)) {
+                    self.parser.error_at_previous("can't have more than 255 arguments");
+                    break;
+                }
+                count += 1;
+                self.expression();
+
+                if (!self.parser.match(TokenType.comma)) break;
+            }
+        }
+        self.parser.consume(
+            TokenType.right_paren,
+            "expect ')' after argument list",
+        );
+
+        return count;
+    }
+
     fn identifier_constant(self: *Compiler, token: Token) u8 {
         return self.make_constant(Value.obj(new_string(
             self.strings,
@@ -724,6 +751,7 @@ pub const Compiler = struct {
     }
 
     fn end(self: *Compiler) *Obj {
+        self.emit_opcode(OpCode.nil);
         self.emit_opcode(OpCode._return);
         if (self.debug and !self.parser.had_error) {
             disassemble_chunk(self.current_chunk(), self.function);
