@@ -1,0 +1,21 @@
+fun areWeHavingItYet() {
+  print "Yes we are!";
+}
+
+print areWeHavingItYet;
+
+fun noReturn() {
+  print "Do stuff";
+  // No return here.
+}
+
+print noReturn(); // ???
+
+fun fib(n) {
+  if (n < 2) return n;
+  return fib(n - 2) + fib(n - 1);
+}
+
+var start = clock();
+print fib(35);
+print clock() - start;

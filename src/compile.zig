@@ -15,6 +15,8 @@ const Value = @import("value.zig").Value;
 
 const obj = @import("object.zig");
 const Obj = obj.Obj;
+const new_function = obj.new_function;
+const new_string = obj.new_string;
 const alloc_string = obj.alloc_string;
 
 const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
@@ -49,7 +51,7 @@ const ParseRule = struct {
 // order here must match order in scanner.zig TokenType so that indexing on the enum value works
 const RULES = [_]ParseRule{
     // Single-character tokens.
-    .{ .prefix = Compiler.grouping, .infix = null, .precedence = .none }, // left_paren,
+    .{ .prefix = Compiler.grouping, .infix = Compiler.call, .precedence = .call }, // left_paren,
     .{ .prefix = null, .infix = null, .precedence = .none }, // right_paren,
     .{ .prefix = null, .infix = null, .precedence = .none }, // left_brace,
     .{ .prefix = null, .infix = null, .precedence = .none }, // right_brace,
@@ -101,26 +103,25 @@ fn get_rule(t: TokenType) *const ParseRule {
 
 pub fn compile(
     source: []const u8,
-    chunk: *Chunk,
     allocator: std.mem.Allocator,
     debug: bool,
     objects: *?*Obj,
     strings: *ObjStringHashMap,
-) !void {
+) !*Obj {
     var scanner = Scanner.init(source);
     var parser = Parser.init(&scanner);
     parser.advance();
 
-    var compiler = Compiler{
-        .current_chunk = chunk,
-        .parser = &parser,
-        .allocator = allocator,
-        .debug = debug,
-        .objects = objects,
-        .strings = strings,
-    };
+    var compiler = Compiler.init(
+        FunctionType.script,
+        &parser,
+        allocator,
+        debug,
+        objects,
+        strings,
+    );
 
-    try compiler.compile();
+    return try compiler.compile();
 }
 
 const Local = struct {
@@ -128,11 +129,21 @@ const Local = struct {
     depth: ?u8 = null,
 };
 
+const FunctionType = enum {
+    function,
+    script,
+};
+
 pub const Compiler = struct {
-    current_chunk: *Chunk,
+    function: *Obj,
+    function_type: FunctionType,
+
     parser: *Parser,
+
     allocator: std.mem.Allocator,
+
     debug: bool,
+
     objects: *?*Obj,
     strings: *ObjStringHashMap,
 
@@ -140,13 +151,72 @@ pub const Compiler = struct {
     local_count: u8 = 0,
     scope_depth: u8 = 0,
 
-    pub fn compile(self: *Compiler) !void {
+    pub fn init(
+        function_type: FunctionType,
+        parser: *Parser,
+        allocator: std.mem.Allocator,
+        debug: bool,
+        objects: *?*Obj,
+        strings: *ObjStringHashMap,
+    ) Compiler {
+        var function_obj = new_function(objects, allocator);
+
+        var compiler = Compiler{
+            .function = function_obj,
+            .function_type = function_type,
+            .parser = parser,
+            .allocator = allocator,
+            .debug = debug,
+            .objects = objects,
+            .strings = strings,
+        };
+
+        // reserve the first local slot for compiler use
+        compiler.add_local(.{
+            .t = TokenType.nil,
+            .start = "",
+            .length = 0,
+            .line = 0,
+        });
+        compiler.mark_initialized();
+
+        if (function_type != FunctionType.script) {
+            function_obj.as_function().name = alloc_string(
+                strings,
+                parser.previous.start[0..parser.previous.length],
+                allocator,
+            );
+        }
+
+        return compiler;
+    }
+
+    fn init_with(
+        self: *Compiler,
+        function_type: FunctionType,
+    ) Compiler {
+        return Compiler.init(
+            function_type,
+            self.parser,
+            self.allocator,
+            self.debug,
+            self.objects,
+            self.strings,
+        );
+    }
+
+    pub fn compile(self: *Compiler) !*Obj {
         while (!self.parser.match(TokenType.eof)) {
             self.declaration();
         }
-        self.end();
 
         if (self.parser.had_error) return compile_err;
+
+        return self.end();
+    }
+
+    pub fn current_chunk(self: *Compiler) *Chunk {
+        return &self.function.as_function().chunk;
     }
 
     fn parse_precedence(self: *Compiler, precedence: Precedence) void {
@@ -175,7 +245,9 @@ pub const Compiler = struct {
     }
 
     fn declaration(self: *Compiler) void {
-        if (self.parser.match(TokenType.cf_var)) {
+        if (self.parser.match(TokenType.fun)) {
+            self.fun_declaration();
+        } else if (self.parser.match(TokenType.cf_var)) {
             self.var_declaration();
         } else {
             self.statement();
@@ -189,6 +261,8 @@ pub const Compiler = struct {
     fn statement(self: *Compiler) void {
         if (self.parser.match(TokenType.print)) {
             self.print_statement();
+        } else if (self.parser.match(TokenType.cf_return)) {
+            self.return_statement();
         } else if (self.parser.match(TokenType.cf_if)) {
             self.if_statement();
         } else if (self.parser.match(TokenType.cf_while)) {
@@ -229,12 +303,14 @@ pub const Compiler = struct {
     }
 
     fn string(self: *Compiler, _: bool) void {
-        var object = alloc_string(
+        var object = new_string(
             self.strings,
             self.parser.previous.start[1 .. self.parser.previous.length - 1],
+            self.objects,
             self.allocator,
+            false,
         );
-        self.emit_constant(Value.obj(object, self.objects));
+        self.emit_constant(Value.obj(object));
     }
 
     fn variable(self: *Compiler, can_assign: bool) void {
@@ -310,6 +386,11 @@ pub const Compiler = struct {
         }
     }
 
+    fn call(self: *Compiler, _: bool) void {
+        const arg_count = self.argument_list();
+        self.emit_compound(OpCode.call, arg_count);
+    }
+
     fn logical_and(self: *Compiler, _: bool) void {
         const end_jump = self.emit_jump(OpCode.jump_if_false);
         self.emit_opcode(OpCode.pop);
@@ -337,6 +418,20 @@ pub const Compiler = struct {
         self.emit_opcode(OpCode.print);
     }
 
+    fn return_statement(self: *Compiler) void {
+        if (self.function_type == .script) {
+            self.parser.error_at_previous("can't return from top-level code");
+        }
+
+        if (self.parser.match(TokenType.semicolon)) {
+            self.emit_return();
+        } else {
+            self.expression();
+            self.parser.consume(TokenType.semicolon, "expect ';' after return");
+            self.emit_opcode(OpCode._return);
+        }
+    }
+
     fn if_statement(self: *Compiler) void {
         self.parser.consume(TokenType.left_paren, "expect '(' after if");
         self.expression();
@@ -362,7 +457,7 @@ pub const Compiler = struct {
     }
 
     fn while_statement(self: *Compiler) void {
-        const loop_start = self.current_chunk.length();
+        const loop_start = self.current_chunk().length();
 
         self.parser.consume(TokenType.left_paren, "expect '(' after while");
         self.expression();
@@ -390,7 +485,7 @@ pub const Compiler = struct {
             self.expression_statement();
         }
 
-        var loop_start = self.current_chunk.length();
+        var loop_start = self.current_chunk().length();
         var exit_jump: ?usize = null;
 
         if (!self.parser.match(TokenType.semicolon)) {
@@ -406,7 +501,7 @@ pub const Compiler = struct {
 
         if (!self.parser.match(TokenType.right_paren)) {
             const body_jump = self.emit_jump(OpCode.jump);
-            const incr_start = self.current_chunk.length();
+            const incr_start = self.current_chunk().length();
             self.expression();
             self.emit_opcode(OpCode.pop);
             self.parser.consume(
@@ -434,6 +529,49 @@ pub const Compiler = struct {
         self.expression();
         self.parser.consume(TokenType.semicolon, "expect ';' after expression");
         self.emit_opcode(OpCode.pop);
+    }
+
+    fn fun_declaration(self: *Compiler) void {
+        const global = self.parse_variable("expect function name");
+        self.mark_initialized();
+        self.fun(FunctionType.function);
+        self.define_variable(global);
+    }
+
+    fn fun(self: *Compiler, function_type: FunctionType) void {
+        var function_compiler = self.init_with(function_type);
+        function_compiler.begin_scope();
+        var obj_function = function_compiler.function.as_function();
+
+        function_compiler.parser.consume(
+            TokenType.left_paren,
+            "expect '(' after function name",
+        );
+        if (!self.parser.check(TokenType.right_paren)) {
+            while (true) {
+                obj_function.arity += 1;
+                if (obj_function.arity > std.math.maxInt(u8)) {
+                    self.parser.error_at_current("can't have more than 255 parameters");
+                }
+                const constant_idx = function_compiler.parse_variable("expect parameter name");
+                function_compiler.define_variable(constant_idx);
+
+                if (!self.parser.match(TokenType.comma)) break;
+            }
+        }
+
+        function_compiler.parser.consume(
+            TokenType.right_paren,
+            "expect ')' after function args",
+        );
+        function_compiler.parser.consume(
+            TokenType.left_brace,
+            "expect '{' after function declaration",
+        );
+        function_compiler.block();
+
+        var function_obj = function_compiler.end();
+        self.emit_constant(Value.obj(function_obj));
     }
 
     fn var_declaration(self: *Compiler) void {
@@ -468,12 +606,36 @@ pub const Compiler = struct {
         self.emit_compound(OpCode.define_global, index);
     }
 
+    fn argument_list(self: *Compiler) u8 {
+        var count: u8 = 0;
+        if (!self.parser.check(TokenType.right_paren)) {
+            while (true) {
+                if (count == std.math.maxInt(u8)) {
+                    self.parser.error_at_previous("can't have more than 255 arguments");
+                    break;
+                }
+                count += 1;
+                self.expression();
+
+                if (!self.parser.match(TokenType.comma)) break;
+            }
+        }
+        self.parser.consume(
+            TokenType.right_paren,
+            "expect ')' after argument list",
+        );
+
+        return count;
+    }
+
     fn identifier_constant(self: *Compiler, token: Token) u8 {
-        return self.make_constant(Value.obj(alloc_string(
+        return self.make_constant(Value.obj(new_string(
             self.strings,
             token.start[0..token.length],
+            self.objects,
             self.allocator,
-        ), self.objects));
+            false,
+        )));
     }
 
     fn declare_variable(self: *Compiler) void {
@@ -481,9 +643,9 @@ pub const Compiler = struct {
 
         const token = self.parser.previous;
         if (self.local_count > 0) {
-            var i = self.local_count - 1;
-            while (i >= 0) : (i -= 1) {
-                var local: *Local = &self.locals[i];
+            var i = self.local_count;
+            while (i > 0) : (i -= 1) {
+                var local: *Local = &self.locals[i - 1];
                 if (local.depth != null and local.depth.? < self.scope_depth) break;
 
                 if (token.equals(local.token)) {
@@ -505,6 +667,7 @@ pub const Compiler = struct {
     }
 
     fn mark_initialized(self: *Compiler) void {
+        if (self.scope_depth == 0) return;
         var local: *Local = &self.locals[self.local_count - 1];
         local.depth = self.scope_depth;
     }
@@ -526,7 +689,7 @@ pub const Compiler = struct {
 
     // Writing Byte Code to chunk helper methods
     fn emit_byte(self: *Compiler, byte: u8) void {
-        self.current_chunk.write(byte, self.parser.current.line);
+        self.current_chunk().write(byte, self.parser.current.line);
     }
 
     fn emit_opcode(self: *Compiler, op: OpCode) void {
@@ -549,7 +712,7 @@ pub const Compiler = struct {
     }
 
     fn make_constant(self: *Compiler, value: Value) u8 {
-        const constant_idx = self.current_chunk.add_constant(value);
+        const constant_idx = self.current_chunk().add_constant(value);
         if (constant_idx > std.math.maxInt(u8)) {
             self.parser.error_at_previous("too many constants in one chunk");
             return 0;
@@ -562,31 +725,35 @@ pub const Compiler = struct {
         self.emit_opcode(op);
         self.emit_byte(HIGH_BYTE);
         self.emit_byte(HIGH_BYTE);
-        return self.current_chunk.length() - 2;
+        return self.current_chunk().length() - 2;
     }
 
     fn patch_jump(self: *Compiler, offset: usize) void {
         // account for bytes containing the jump value
-        const jump = self.current_chunk.length() - (offset + 2);
+        const jump = self.current_chunk().length() - (offset + 2);
 
         if (jump > std.math.maxInt(u16)) {
             self.parser.error_at_previous("too much code to jump over");
         }
 
-        self.current_chunk.code.items[offset] = @intCast(u8, jump >> 8) & HIGH_BYTE;
-        self.current_chunk.code.items[offset + 1] = @intCast(u8, jump) & HIGH_BYTE;
+        self.current_chunk().code.items[offset] = @intCast(u8, jump >> 8) & HIGH_BYTE;
+        self.current_chunk().code.items[offset + 1] = @intCast(u8, jump) & HIGH_BYTE;
     }
 
     fn emit_loop(self: *Compiler, loop_start: usize) void {
         self.emit_opcode(OpCode.loop);
 
-        const jump = self.current_chunk.length() - loop_start + 2;
+        const jump = self.current_chunk().length() - loop_start + 2;
         if (jump > std.math.maxInt(u16)) {
             self.parser.error_at_previous("too much code in loop");
         }
 
         self.emit_byte(@intCast(u8, jump >> 8) & HIGH_BYTE);
         self.emit_byte(@intCast(u8, jump) & HIGH_BYTE);
+    }
+
+    fn emit_return(self: *Compiler) void {
+        self.emit_opcodes(.{ OpCode.nil, OpCode._return });
     }
 
     // helpers for handling scope
@@ -603,11 +770,13 @@ pub const Compiler = struct {
         }
     }
 
-    fn end(self: *Compiler) void {
-        self.emit_opcode(OpCode._return);
+    fn end(self: *Compiler) *Obj {
+        self.emit_return();
         if (self.debug and !self.parser.had_error) {
-            disassemble_chunk(self.current_chunk, "code");
+            disassemble_chunk(self.current_chunk(), self.function);
         }
+
+        return self.function;
     }
 };
 

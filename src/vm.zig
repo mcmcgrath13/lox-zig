@@ -7,7 +7,6 @@ const OpCode = chnk.OpCode;
 
 const vlu = @import("value.zig");
 const Value = vlu.Value;
-const print_value = vlu.print_value;
 
 const compile = @import("compile.zig").compile;
 
@@ -15,13 +14,17 @@ const disassemble_instruction = @import("debug.zig").disassemble_instruction;
 
 const obj = @import("object.zig");
 const Obj = obj.Obj;
-const take_string = obj.take_string;
+const ObjFunction = obj.ObjFunction;
+const new_string = obj.new_string;
 const ObjString = obj.ObjString;
 const ObjStringContext = obj.ObjStringContext;
+const new_native = obj.new_native;
+const NativeFn = obj.NativeFn;
 
 const common = @import("common.zig");
 
-const STACK_MAX = 256;
+const FRAME_MAX = 64;
+const STACK_MAX = FRAME_MAX * std.math.maxInt(u8);
 
 pub const ObjStringHashMap = HashMap(
     *ObjString,
@@ -37,9 +40,34 @@ pub const InterpretError = error{
     runtime,
 };
 
+const CallFrame = struct {
+    function: *ObjFunction,
+    ip: [*]u8,
+    slots_start: usize,
+
+    fn init(function: *ObjFunction, slots_start: usize) CallFrame {
+        return .{ .function = function, .ip = function.chunk.code.items.ptr, .slots_start = slots_start };
+    }
+
+    fn read_byte(self: *CallFrame) u8 {
+        const byte = self.ip[0];
+        self.ip = self.ip + 1;
+        return byte;
+    }
+
+    fn read_constant(self: *CallFrame) Value {
+        return self.function.chunk.constants.values.items[self.read_byte()];
+    }
+
+    fn read_short(self: *CallFrame) u16 {
+        return common.read_short(.{ self.read_byte(), self.read_byte() });
+    }
+};
+
 pub const VM = struct {
-    chunk: ?*Chunk = null,
-    ip: ?[*]u8 = null,
+    frames: [FRAME_MAX]CallFrame = undefined,
+    frame_count: u8 = 0,
+
     allocator: std.mem.Allocator,
 
     // TODO: revisit if this should really use pointer math
@@ -56,12 +84,14 @@ pub const VM = struct {
     pub fn init(debug: bool, allocator: std.mem.Allocator) VM {
         const strings = ObjStringHashMap.init(allocator);
         const globals = VariableHashMap.init(allocator);
-        return VM{
+        var vm = VM{
             .debug = debug,
             .allocator = allocator,
             .strings = strings,
             .globals = globals,
         };
+        vm.define_native("clock", clock_native);
+        return vm;
     }
 
     pub fn deinit(self: *VM) void {
@@ -84,6 +114,10 @@ pub const VM = struct {
         self.stack_top = 0;
     }
 
+    fn current_frame(self: *VM) *CallFrame {
+        return &self.frames[self.frame_count - 1];
+    }
+
     fn push(self: *VM, value: Value) void {
         self.stack[self.stack_top] = value;
         self.stack_top += 1;
@@ -98,13 +132,28 @@ pub const VM = struct {
         return self.stack[self.stack_top - 1 - distance];
     }
 
-    pub fn interpret(self: *VM, source: []const u8) InterpretError!void {
-        var chunk = Chunk.init(self.allocator);
-        defer chunk.deinit();
+    fn call(self: *VM, function: *ObjFunction, arg_count: u8) !void {
+        if (arg_count != function.arity) {
+            self.runtime_error(
+                "expected {d} arguments, but got {d}\n",
+                .{ function.arity, arg_count },
+            );
+        }
 
-        compile(
+        if (self.frame_count == FRAME_MAX) {
+            self.runtime_error("stack overflow\n", .{});
+            return InterpretError.runtime;
+        }
+
+        var frame = &self.frames[self.frame_count];
+        self.frame_count += 1;
+
+        frame.* = CallFrame.init(function, self.stack_top - arg_count - 1);
+    }
+
+    pub fn interpret(self: *VM, source: []const u8) InterpretError!void {
+        var function_obj = compile(
             source,
-            &chunk,
             self.allocator,
             self.debug,
             &self.objects,
@@ -112,13 +161,16 @@ pub const VM = struct {
         ) catch {
             return InterpretError.compile;
         };
-        self.chunk = &chunk;
-        self.ip = chunk.code.items.ptr;
+
+        self.push(Value.obj(function_obj));
+        try self.call(function_obj.as_function(), 0);
 
         return self.run();
     }
 
     fn run(self: *VM) InterpretError!void {
+        var frame = self.current_frame();
+
         while (true) {
             if (self.debug) {
                 // print stack
@@ -127,22 +179,20 @@ pub const VM = struct {
                     if (i == self.stack_top) {
                         break;
                     }
-                    std.debug.print("[", .{});
-                    print_value(value);
-                    std.debug.print("]", .{});
+                    std.debug.print("[{}]", .{value});
                 }
                 std.debug.print("\n", .{});
 
-                _ = disassemble_instruction(self.chunk.?, @ptrToInt(self.ip.?) - @ptrToInt(self.chunk.?.code.items.ptr));
+                _ = disassemble_instruction(&frame.function.chunk, @ptrToInt(frame.ip) - @ptrToInt(frame.function.chunk.code.items.ptr));
             }
-            const instruction = self.read_byte();
+            const instruction = frame.read_byte();
             try switch (@intToEnum(OpCode, instruction)) {
                 .constant => {
-                    const constant = self.read_constant();
+                    const constant = frame.read_constant();
                     self.push(constant);
                 },
                 .define_global => {
-                    var name = self.read_constant().as_obj().as_string();
+                    var name = frame.read_constant().as_obj().as_string();
                     self.globals.put(name, self.peek(0)) catch {
                         std.debug.print("Out of memory!\n", .{});
                         std.process.exit(1);
@@ -150,54 +200,67 @@ pub const VM = struct {
                     _ = self.pop();
                 },
                 .get_global => {
-                    var name = self.read_constant().as_obj().as_string();
+                    var name = frame.read_constant().as_obj().as_string();
                     if (self.globals.get(name)) |value| {
                         self.push(value);
                     } else {
-                        self.runtime_error("undefined variable '{s}'", .{name.data});
+                        self.runtime_error("undefined variable '{s}'\n", .{name.data});
                         return InterpretError.runtime;
                     }
                 },
                 .set_global => {
-                    var name = self.read_constant().as_obj().as_string();
+                    var name = frame.read_constant().as_obj().as_string();
                     if (self.globals.getPtr(name)) |value_ptr| {
                         value_ptr.* = self.peek(0);
                     } else {
-                        self.runtime_error("can't assign to undefined variable '{s}'", .{name.data});
+                        self.runtime_error("can't assign to undefined variable '{s}'\n", .{name.data});
                         return InterpretError.runtime;
                     }
                 },
                 .get_local => {
-                    const idx = self.read_byte();
-                    self.push(self.stack[idx]);
+                    const idx = frame.read_byte();
+                    self.push(self.stack[frame.slots_start + idx]);
                 },
                 .set_local => {
-                    const idx = self.read_byte();
-                    self.stack[idx] = self.peek(0);
+                    const idx = frame.read_byte();
+                    self.stack[frame.slots_start + idx] = self.peek(0);
                 },
                 .jump_if_false => {
-                    const jump = self.read_short();
+                    const jump = frame.read_short();
                     if (self.peek(0).is_falsey()) {
-                        self.ip.? += jump;
+                        frame.ip += jump;
                     }
                 },
                 .jump => {
-                    const jump = self.read_short();
-                    self.ip.? += jump;
+                    const jump = frame.read_short();
+                    frame.ip += jump;
                 },
                 .loop => {
-                    const jump = self.read_short();
-                    self.ip.? -= jump;
+                    const jump = frame.read_short();
+                    frame.ip -= jump;
                 },
                 ._return => {
-                    return;
+                    const result = self.pop();
+                    self.frame_count -= 1;
+                    if (self.frame_count == 0) {
+                        _ = self.pop();
+                        return;
+                    }
+
+                    self.stack_top = frame.slots_start;
+                    self.push(result);
+                    frame = self.current_frame();
                 },
                 .print => {
-                    print_value(self.pop());
-                    std.debug.print("\n", .{});
+                    std.debug.print("{}\n", .{self.pop()});
                 },
                 .pop => {
                     _ = self.pop();
+                },
+                .call => {
+                    const arg_count = frame.read_byte();
+                    try self.call_value(self.peek(arg_count), arg_count);
+                    frame = self.current_frame();
                 },
 
                 // literals
@@ -209,7 +272,7 @@ pub const VM = struct {
                 .not => self.push(Value.boolean(self.pop().is_falsey())),
                 .negate => {
                     if (!self.peek(0).is_number()) {
-                        self.runtime_error("operand must be a number: found {s}", .{print_value(self.peek(0))});
+                        self.runtime_error("operand must be a number: found {s}\n", .{self.peek(0)});
                         return InterpretError.runtime;
                     }
                     self.push(Value.number(-1 * self.pop().as_number()));
@@ -241,20 +304,6 @@ pub const VM = struct {
         }
     }
 
-    fn read_byte(self: *VM) u8 {
-        const byte = self.ip.?[0];
-        self.ip = self.ip.? + 1;
-        return byte;
-    }
-
-    fn read_constant(self: *VM) Value {
-        return self.chunk.?.constants.values.items[self.read_byte()];
-    }
-
-    fn read_short(self: *VM) u16 {
-        return common.read_short(.{ self.read_byte(), self.read_byte() });
-    }
-
     fn binary_op(
         self: *VM,
         comptime R: type,
@@ -263,8 +312,8 @@ pub const VM = struct {
     ) InterpretError!void {
         if (!self.peek(0).is_number() or !self.peek(1).is_number()) {
             self.runtime_error(
-                "operands must be numbers, found: {s} {s}",
-                .{ print_value(self.peek(0)), print_value(self.peek(1)) },
+                "operands must be numbers, found: {s} {s}\n",
+                .{ self.peek(0), self.peek(1) },
             );
             return InterpretError.runtime;
         }
@@ -277,12 +326,72 @@ pub const VM = struct {
         const b: []const u8 = self.pop().as_obj().as_string().data;
         const a: []const u8 = self.pop().as_obj().as_string().data;
         const data = std.mem.concat(self.allocator, u8, &[_][]const u8{ a, b }) catch {
-            self.runtime_error("out of memory", .{});
+            self.runtime_error("out of memory\n", .{});
             return InterpretError.runtime;
         };
         self.push(
-            Value.obj(take_string(&self.strings, data, self.allocator), &self.objects),
+            Value.obj(new_string(
+                &self.strings,
+                data,
+                &self.objects,
+                self.allocator,
+                true,
+            )),
         );
+    }
+
+    fn call_value(
+        self: *VM,
+        callee: Value,
+        arg_count: u8,
+    ) !void {
+        if (callee.is_obj()) {
+            var obj_val = callee.as_obj();
+            switch (obj_val.t) {
+                .function => {
+                    return self.call(obj_val.as_function(), arg_count);
+                },
+                .native => {
+                    const native = obj_val.as_native();
+                    var stack_ptr: [*]Value = &self.stack;
+                    const result = native.function(
+                        arg_count,
+                        stack_ptr + self.stack_top - arg_count,
+                    );
+                    self.stack_top -= arg_count;
+                    self.push(result);
+                    return;
+                },
+                else => {},
+            }
+        }
+        self.runtime_error("can only call functions and classes\n", .{});
+        return InterpretError.runtime;
+    }
+
+    fn define_native(
+        self: *VM,
+        name: []const u8,
+        function: NativeFn,
+    ) void {
+        self.push(Value.obj(new_string(
+            &self.strings,
+            name,
+            &self.objects,
+            self.allocator,
+            false,
+        )));
+        self.push(Value.obj(new_native(
+            function,
+            &self.objects,
+            self.allocator,
+        )));
+        self.globals.put(self.peek(1).as_obj().as_string(), self.peek(0)) catch {
+            std.debug.print("Out of memory!\n", .{});
+            std.process.exit(1);
+        };
+        _ = self.pop();
+        _ = self.pop();
     }
 
     fn runtime_error(
@@ -292,9 +401,14 @@ pub const VM = struct {
     ) void {
         std.debug.print(format, args);
 
-        const instruction: usize = @ptrToInt(self.ip.?) - @ptrToInt(self.chunk.?.code.items.ptr) - 1;
-        const line: usize = self.chunk.?.lines.items[instruction];
-        std.debug.print("[line {d}] in script\n", .{line});
+        var i = self.frame_count;
+        while (i >= 0) : (i -= 1) {
+            const frame = self.frames[i - 1];
+            const instruction: usize = @ptrToInt(frame.ip) - @ptrToInt(frame.function.chunk.code.items.ptr) - 1;
+            const line: usize = frame.function.chunk.lines.items[instruction];
+            std.debug.print("[line {d}] in {}\n", .{ line, frame.function });
+        }
+
         self.reset_stack();
     }
 };
@@ -322,4 +436,11 @@ fn less(left: f64, right: f64) bool {
 
 fn greater(left: f64, right: f64) bool {
     return left > right;
+}
+
+// ========= NATIVE FUNCTIONS =========
+fn clock_native(arg_count: u8, args: [*]Value) Value {
+    _ = arg_count;
+    _ = args;
+    return Value.number(@intToFloat(f64, std.time.timestamp()));
 }

@@ -2,11 +2,10 @@ const std = @import("std");
 const chunk = @import("chunk.zig");
 const Chunk = chunk.Chunk;
 const OpCode = chunk.OpCode;
-const print_value = @import("value.zig").print_value;
 
 const read_short = @import("common.zig").read_short;
 
-pub fn disassemble_chunk(c: *Chunk, name: []const u8) void {
+pub fn disassemble_chunk(c: *Chunk, name: anytype) void {
     std.debug.print("==={s}===\n", .{name});
 
     var offset: usize = 0;
@@ -39,6 +38,7 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         ._return => simple_instruction("RETURN", offset),
         .print => simple_instruction("PRINT", offset),
         .pop => simple_instruction("POP", offset),
+        .call => byte_instruction("CALL", c, offset),
 
         // literals
         .nil => simple_instruction("NIL", offset),
@@ -70,8 +70,10 @@ pub fn simple_instruction(name: []const u8, offset: usize) usize {
 
 pub fn constant_instruction(name: []const u8, c: *Chunk, offset: usize) usize {
     const constant_idx: usize = c.code.items[offset + 1];
-    std.debug.print("{s: <16} {d: >4} ", .{ name, constant_idx });
-    print_value(c.constants.values.items[constant_idx]);
+    std.debug.print(
+        "{s: <16} {d: >4} '{}'",
+        .{ name, constant_idx, c.constants.values.items[constant_idx] },
+    );
     std.debug.print("\n", .{});
     return offset + 2;
 }

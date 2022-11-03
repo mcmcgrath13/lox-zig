@@ -4,7 +4,6 @@ const ArrayList = std.ArrayList;
 const common = @import("common.zig");
 const obj = @import("object.zig");
 const Obj = obj.Obj;
-const print_obj = obj.print_obj;
 
 pub const Value = union(enum) {
     val_boolean: bool,
@@ -24,11 +23,7 @@ pub const Value = union(enum) {
         return Value.val_nil;
     }
 
-    pub fn obj(val: *Obj, tail: *?*Obj) Value {
-        if (tail.*) |o| {
-            val.next = o;
-        }
-        tail.* = val;
+    pub fn obj(val: *Obj) Value {
         return Value{ .val_obj = val };
     }
 
@@ -85,7 +80,27 @@ pub const Value = union(enum) {
         return switch (self) {
             .val_obj => switch (self.val_obj.t) {
                 .string => true,
-                // else => false,
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    pub fn is_function(self: Value) bool {
+        return switch (self) {
+            .val_obj => switch (self.val_obj.t) {
+                .function => true,
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    pub fn is_native(self: Value) bool {
+        return switch (self) {
+            .val_obj => switch (self.val_obj.t) {
+                .native => true,
+                else => false,
             },
             else => false,
         };
@@ -125,6 +140,23 @@ pub const Value = union(enum) {
             },
         }
     }
+
+    pub fn format(
+        self: Value,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        switch (self) {
+            .val_boolean => try writer.print("{}", .{self.as_boolean()}),
+            .val_nil => try writer.print("nil", .{}),
+            .val_number => try writer.print("{d}", .{self.as_number()}),
+            .val_obj => try writer.print("{}", .{self.as_obj()}),
+        }
+    }
 };
 
 pub const ValueArray = struct {
@@ -148,12 +180,3 @@ pub const ValueArray = struct {
         return self.values.items.len;
     }
 };
-
-pub fn print_value(value: Value) void {
-    switch (value) {
-        .val_boolean => std.debug.print("'{any}'", .{value.as_boolean()}),
-        .val_nil => std.debug.print("'nil'", .{}),
-        .val_number => std.debug.print("'{d}'", .{value.as_number()}),
-        .val_obj => print_obj(value.as_obj()),
-    }
-}

@@ -2,27 +2,51 @@ const std = @import("std");
 
 const common = @import("common.zig");
 
+const Chunk = @import("chunk.zig").Chunk;
+
+const Value = @import("value.zig").Value;
+
 const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
 
 pub const ObjType = union(enum) {
     string: *ObjString,
+    function: *ObjFunction,
+    native: *ObjNative,
 
     pub fn string(obj: *ObjString) ObjType {
         return ObjType{ .string = obj };
     }
 
+    pub fn function(obj: *ObjFunction) ObjType {
+        return ObjType{ .function = obj };
+    }
+
+    pub fn native(obj: *ObjNative) ObjType {
+        return ObjType{ .native = obj };
+    }
+
     pub fn deinit(self: *ObjType, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .string => {
-                self.string.refs -= 1;
-                if (self.string.refs == 0) {
-                    self.string.deinit(allocator);
-                    allocator.destroy(self.string);
-                }
+            .string => free_objstr(self.string, allocator),
+            .function => {
+                if (self.function.name) |name| free_objstr(name, allocator);
+                self.function.deinit(allocator);
+                allocator.destroy(self.function);
+            },
+            .native => {
+                allocator.destroy(self.native);
             },
         }
     }
 };
+
+fn free_objstr(objstr: *ObjString, allocator: std.mem.Allocator) void {
+    objstr.refs -= 1;
+    if (objstr.refs == 0) {
+        objstr.deinit(allocator);
+        allocator.destroy(objstr);
+    }
+}
 
 pub const Obj = struct {
     t: ObjType,
@@ -36,12 +60,32 @@ pub const Obj = struct {
         self.t.deinit(allocator);
     }
 
+    fn update_next(obj: *Obj, head: *?*Obj) void {
+        if (head.*) |o| {
+            obj.next = o;
+        }
+        head.* = obj;
+    }
+
     pub fn equals(self: *Obj, other: *Obj) bool {
         switch (self.t) {
             .string => switch (other.t) {
                 .string => {
                     return self.t.string == other.t.string;
                 },
+                else => return false,
+            },
+            .function => switch (other.t) {
+                .function => {
+                    return self.t.function == other.t.function;
+                },
+                else => return false,
+            },
+            .native => switch (other.t) {
+                .native => {
+                    return self.t.native == other.t.native;
+                },
+                else => return false,
             },
         }
     }
@@ -49,10 +93,53 @@ pub const Obj = struct {
     pub fn as_string(self: *Obj) *ObjString {
         switch (self.t) {
             .string => return self.t.string,
+            else => unreachable,
+        }
+    }
+
+    pub fn as_function(self: *Obj) *ObjFunction {
+        switch (self.t) {
+            .function => return self.t.function,
+            else => unreachable,
+        }
+    }
+
+    pub fn as_native(self: *Obj) *ObjNative {
+        switch (self.t) {
+            .native => return self.t.native,
+            else => unreachable,
+        }
+    }
+
+    pub fn format(
+        self: Obj,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        switch (self.t) {
+            .string => try writer.print("\"{s}\"", .{self.t.string}),
+            .function => try writer.print("{}", .{self.t.function}),
+            .native => try writer.print("{}", .{self.t.native}),
         }
     }
 };
 
+pub fn alloc_obj(
+    objt: ObjType,
+    objects: *?*Obj,
+    allocator: std.mem.Allocator,
+) *Obj {
+    var obj = common.create_or_die(allocator, Obj);
+    obj.* = Obj.init(objt);
+    obj.update_next(objects);
+    return obj;
+}
+
+// ======== OBJ STRING ==========
 pub const ObjString = struct {
     data: []const u8,
     refs: usize = 1,
@@ -70,6 +157,18 @@ pub const ObjString = struct {
     pub fn deinit(self: *ObjString, allocator: std.mem.Allocator) void {
         allocator.free(self.data);
     }
+
+    pub fn format(
+        self: ObjString,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        try writer.print("{s}", .{self.data});
+    }
 };
 
 // Context for hash map - can't use default string one as we want to get back
@@ -86,17 +185,11 @@ pub const ObjStringContext = struct {
     }
 };
 
-pub fn alloc_obj(objt: ObjType, allocator: std.mem.Allocator) *Obj {
-    var obj = common.create_or_die(allocator, Obj);
-    obj.* = Obj.init(objt);
-    return obj;
-}
-
 fn get_or_put_interned_string(
     strings: *ObjStringHashMap,
     new_objstr: *ObjString,
     allocator: std.mem.Allocator,
-) *Obj {
+) *ObjString {
     // new_objstr is a placeholder for the results of the if
     var objstr: *ObjString = new_objstr;
     if (strings.getKey(new_objstr)) |interned_objstr| {
@@ -112,16 +205,26 @@ fn get_or_put_interned_string(
         };
     }
 
-    var objt = ObjType.string(objstr);
+    return objstr;
+}
 
-    return alloc_obj(objt, allocator);
+pub fn new_string(
+    strings: *ObjStringHashMap,
+    string: []const u8,
+    objects: *?*Obj,
+    allocator: std.mem.Allocator,
+    take: bool,
+) *Obj {
+    var objstr = if (take) take_string(strings, string, allocator) else alloc_string(strings, string, allocator);
+    var objt = ObjType.string(objstr);
+    return alloc_obj(objt, objects, allocator);
 }
 
 pub fn alloc_string(
     strings: *ObjStringHashMap,
     string: []const u8,
     allocator: std.mem.Allocator,
-) *Obj {
+) *ObjString {
     var new_objstr = ObjString.init(string, allocator);
     return get_or_put_interned_string(strings, &new_objstr, allocator);
 }
@@ -130,13 +233,86 @@ pub fn take_string(
     strings: *ObjStringHashMap,
     data: []const u8,
     allocator: std.mem.Allocator,
-) *Obj {
+) *ObjString {
     var new_objstr = ObjString.take(data);
     return get_or_put_interned_string(strings, &new_objstr, allocator);
 }
 
-pub fn print_obj(obj: *Obj) void {
-    switch (obj.t) {
-        .string => std.debug.print("'{s}'", .{obj.t.string.data}),
+// ========= OBJ FUNCTION =======
+pub const ObjFunction = struct {
+    arity: u8 = 0,
+    chunk: Chunk,
+    name: ?*ObjString = null,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+    ) ObjFunction {
+        var chunk = Chunk.init(allocator);
+        return .{ .chunk = chunk };
     }
+
+    pub fn deinit(self: *ObjFunction, _: std.mem.Allocator) void {
+        self.chunk.deinit();
+    }
+
+    pub fn format(
+        self: ObjFunction,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        if (self.name) |name| {
+            try writer.print("<fn {s}>", .{name});
+        } else {
+            try writer.print("<script>", .{});
+        }
+    }
+};
+
+pub fn new_function(
+    objects: *?*Obj,
+    allocator: std.mem.Allocator,
+) *Obj {
+    var objfunc = common.create_or_die(allocator, ObjFunction);
+    objfunc.* = ObjFunction.init(allocator);
+    var objt = ObjType.function(objfunc);
+    return alloc_obj(objt, objects, allocator);
+}
+
+// ========= OBJ NATIVE =======
+pub const NativeFn = fn (arg_count: u8, args: [*]Value) Value;
+
+pub const ObjNative = struct {
+    function: NativeFn,
+
+    pub fn init(function: NativeFn) ObjNative {
+        return ObjNative{ .function = function };
+    }
+
+    pub fn format(
+        self: ObjNative,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = self;
+        _ = fmt;
+        _ = options;
+
+        try writer.print("<native fn>", .{});
+    }
+};
+
+pub fn new_native(
+    function: NativeFn,
+    objects: *?*Obj,
+    allocator: std.mem.Allocator,
+) *Obj {
+    var objnative = common.create_or_die(allocator, ObjNative);
+    objnative.* = ObjNative.init(function);
+    var objt = ObjType.native(objnative);
+    return alloc_obj(objt, objects, allocator);
 }
