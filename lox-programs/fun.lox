@@ -10,3 +10,5 @@ fun noReturn() {
 }
 
 print noReturn(); // ???
+
+return "What?!";

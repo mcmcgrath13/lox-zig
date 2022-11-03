@@ -261,6 +261,8 @@ pub const Compiler = struct {
     fn statement(self: *Compiler) void {
         if (self.parser.match(TokenType.print)) {
             self.print_statement();
+        } else if (self.parser.match(TokenType.cf_return)) {
+            self.return_statement();
         } else if (self.parser.match(TokenType.cf_if)) {
             self.if_statement();
         } else if (self.parser.match(TokenType.cf_while)) {
@@ -414,6 +416,20 @@ pub const Compiler = struct {
         self.expression();
         self.parser.consume(TokenType.semicolon, "expect ';' after value");
         self.emit_opcode(OpCode.print);
+    }
+
+    fn return_statement(self: *Compiler) void {
+        if (self.function_type == .script) {
+            self.parser.error_at_previous("can't return from top-level code");
+        }
+
+        if (self.parser.match(TokenType.semicolon)) {
+            self.emit_return();
+        } else {
+            self.expression();
+            self.parser.consume(TokenType.semicolon, "expect ';' after return");
+            self.emit_opcode(OpCode._return);
+        }
     }
 
     fn if_statement(self: *Compiler) void {
@@ -736,6 +752,10 @@ pub const Compiler = struct {
         self.emit_byte(@intCast(u8, jump) & HIGH_BYTE);
     }
 
+    fn emit_return(self: *Compiler) void {
+        self.emit_opcodes(.{ OpCode.nil, OpCode._return });
+    }
+
     // helpers for handling scope
     fn begin_scope(self: *Compiler) void {
         self.scope_depth += 1;
@@ -751,8 +771,7 @@ pub const Compiler = struct {
     }
 
     fn end(self: *Compiler) *Obj {
-        self.emit_opcode(OpCode.nil);
-        self.emit_opcode(OpCode._return);
+        self.emit_return();
         if (self.debug and !self.parser.had_error) {
             disassemble_chunk(self.current_chunk(), self.function);
         }
