@@ -15,9 +15,9 @@ const Value = @import("value.zig").Value;
 
 const obj = @import("object.zig");
 const Obj = obj.Obj;
-const ObjFunction = obj.ObjFunction;
 const new_function = obj.new_function;
 const new_string = obj.new_string;
+const alloc_string = obj.alloc_string;
 
 const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
 
@@ -112,13 +112,7 @@ pub fn compile(
     var parser = Parser.init(&scanner);
     parser.advance();
 
-    // create a full on Obj and add it to our obj linked list for memory
-    // tracking purposes, then pull out the actual function for the compiler
-    var function_obj = new_function(objects, allocator);
-    var function = function_obj.as_function();
-
     var compiler = Compiler.init(
-        function,
         FunctionType.script,
         &parser,
         allocator,
@@ -127,9 +121,7 @@ pub fn compile(
         strings,
     );
 
-    try compiler.compile();
-
-    return function_obj;
+    return try compiler.compile();
 }
 
 const Local = struct {
@@ -143,7 +135,7 @@ const FunctionType = enum {
 };
 
 pub const Compiler = struct {
-    function: *ObjFunction,
+    function: *Obj,
     function_type: FunctionType,
 
     parser: *Parser,
@@ -160,7 +152,6 @@ pub const Compiler = struct {
     scope_depth: u8 = 0,
 
     pub fn init(
-        function: *ObjFunction,
         function_type: FunctionType,
         parser: *Parser,
         allocator: std.mem.Allocator,
@@ -168,8 +159,10 @@ pub const Compiler = struct {
         objects: *?*Obj,
         strings: *ObjStringHashMap,
     ) Compiler {
+        var function_obj = new_function(objects, allocator);
+
         var compiler = Compiler{
-            .function = function,
+            .function = function_obj,
             .function_type = function_type,
             .parser = parser,
             .allocator = allocator,
@@ -187,20 +180,43 @@ pub const Compiler = struct {
         });
         compiler.mark_initialized();
 
+        if (function_type != FunctionType.script) {
+            function_obj.as_function().name = alloc_string(
+                strings,
+                parser.previous.start[0..parser.previous.length],
+                allocator,
+            );
+        }
+
         return compiler;
     }
 
-    pub fn compile(self: *Compiler) !void {
+    fn init_with(
+        self: *Compiler,
+        function_type: FunctionType,
+    ) Compiler {
+        return Compiler.init(
+            function_type,
+            self.parser,
+            self.allocator,
+            self.debug,
+            self.objects,
+            self.strings,
+        );
+    }
+
+    pub fn compile(self: *Compiler) !*Obj {
         while (!self.parser.match(TokenType.eof)) {
             self.declaration();
         }
-        self.end();
 
         if (self.parser.had_error) return compile_err;
+
+        return self.end();
     }
 
     pub fn current_chunk(self: *Compiler) *Chunk {
-        return &self.function.chunk;
+        return &self.function.as_function().chunk;
     }
 
     fn parse_precedence(self: *Compiler, precedence: Precedence) void {
@@ -229,7 +245,9 @@ pub const Compiler = struct {
     }
 
     fn declaration(self: *Compiler) void {
-        if (self.parser.match(TokenType.cf_var)) {
+        if (self.parser.match(TokenType.fun)) {
+            self.fun_declaration();
+        } else if (self.parser.match(TokenType.cf_var)) {
             self.var_declaration();
         } else {
             self.statement();
@@ -492,6 +510,49 @@ pub const Compiler = struct {
         self.emit_opcode(OpCode.pop);
     }
 
+    fn fun_declaration(self: *Compiler) void {
+        const global = self.parse_variable("expect function name");
+        self.mark_initialized();
+        self.fun(FunctionType.function);
+        self.define_variable(global);
+    }
+
+    fn fun(self: *Compiler, function_type: FunctionType) void {
+        var function_compiler = self.init_with(function_type);
+        function_compiler.begin_scope();
+        var obj_function = function_compiler.function.as_function();
+
+        function_compiler.parser.consume(
+            TokenType.left_paren,
+            "expect '(' after function name",
+        );
+        if (!self.parser.check(TokenType.right_paren)) {
+            while (true) {
+                obj_function.arity += 1;
+                if (obj_function.arity > std.math.maxInt(u8)) {
+                    self.parser.error_at_current("can't have more than 255 parameters");
+                }
+                const constant_idx = function_compiler.parse_variable("expect parameter name");
+                function_compiler.define_variable(constant_idx);
+
+                if (!self.parser.match(TokenType.comma)) break;
+            }
+        }
+
+        function_compiler.parser.consume(
+            TokenType.right_paren,
+            "expect ')' after function args",
+        );
+        function_compiler.parser.consume(
+            TokenType.left_brace,
+            "expect '{' after function declaration",
+        );
+        function_compiler.block();
+
+        var function_obj = function_compiler.end();
+        self.emit_constant(Value.obj(function_obj));
+    }
+
     fn var_declaration(self: *Compiler) void {
         const global = self.parse_variable("expect variable name");
 
@@ -563,6 +624,7 @@ pub const Compiler = struct {
     }
 
     fn mark_initialized(self: *Compiler) void {
+        if (self.scope_depth == 0) return;
         var local: *Local = &self.locals[self.local_count - 1];
         local.depth = self.scope_depth;
     }
@@ -661,11 +723,13 @@ pub const Compiler = struct {
         }
     }
 
-    fn end(self: *Compiler) void {
+    fn end(self: *Compiler) *Obj {
         self.emit_opcode(OpCode._return);
         if (self.debug and !self.parser.had_error) {
             disassemble_chunk(self.current_chunk(), self.function);
         }
+
+        return self.function;
     }
 };
 
