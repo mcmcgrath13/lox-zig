@@ -48,62 +48,44 @@ pub const Value = union(enum) {
         };
     }
 
+    fn is(self: Value, comptime field: [:0]const u8) bool {
+        return std.mem.eql(u8, @tagName(self), field);
+    }
+
     pub fn is_number(self: Value) bool {
-        return switch (self) {
-            .val_number => true,
-            else => false,
-        };
+        return self.is("val_number");
     }
 
     pub fn is_boolean(self: Value) bool {
-        return switch (self) {
-            .val_boolean => true,
-            else => false,
-        };
+        return self.is("val_boolean");
     }
 
     pub fn is_nil(self: Value) bool {
-        return switch (self) {
-            .val_nil => true,
-            else => false,
-        };
+        return self.is("val_nil");
     }
 
     pub fn is_obj(self: Value) bool {
-        return switch (self) {
-            .val_obj => true,
-            else => false,
-        };
+        return self.is("val_obj");
+    }
+
+    fn is_obj_type(self: Value, comptime field: [:0]const u8) bool {
+        if (self.is_obj()) {
+            return std.mem.eql(u8, @tagName(self.as_obj().t), field);
+        }
+
+        return false;
     }
 
     pub fn is_string(self: Value) bool {
-        return switch (self) {
-            .val_obj => switch (self.val_obj.t) {
-                .string => true,
-                else => false,
-            },
-            else => false,
-        };
+        return self.is_obj_type("string");
     }
 
     pub fn is_function(self: Value) bool {
-        return switch (self) {
-            .val_obj => switch (self.val_obj.t) {
-                .function => true,
-                else => false,
-            },
-            else => false,
-        };
+        return self.is_obj_type("function");
     }
 
     pub fn is_native(self: Value) bool {
-        return switch (self) {
-            .val_obj => switch (self.val_obj.t) {
-                .native => true,
-                else => false,
-            },
-            else => false,
-        };
+        return self.is_obj_type("native");
     }
 
     pub fn is_falsey(self: Value) bool {
@@ -112,24 +94,6 @@ pub const Value = union(enum) {
 
     pub fn equals(self: Value, other: Value) bool {
         switch (self) {
-            .val_nil => {
-                switch (other) {
-                    .val_nil => return true,
-                    else => return false,
-                }
-            },
-            .val_boolean => {
-                switch (other) {
-                    .val_boolean => return self.as_boolean() == other.as_boolean(),
-                    else => return false,
-                }
-            },
-            .val_number => {
-                switch (other) {
-                    .val_number => return self.as_number() == other.as_number(),
-                    else => return false,
-                }
-            },
             .val_obj => {
                 switch (other) {
                     .val_obj => {
@@ -137,6 +101,9 @@ pub const Value = union(enum) {
                     },
                     else => return false,
                 }
+            },
+            else => {
+                return std.meta.eql(self, other);
             },
         }
     }

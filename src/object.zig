@@ -76,32 +76,7 @@ pub const Obj = struct {
     }
 
     pub fn equals(self: *Obj, other: *Obj) bool {
-        switch (self.t) {
-            .string => switch (other.t) {
-                .string => {
-                    return self.t.string == other.t.string;
-                },
-                else => return false,
-            },
-            .function => switch (other.t) {
-                .function => {
-                    return self.t.function == other.t.function;
-                },
-                else => return false,
-            },
-            .native => switch (other.t) {
-                .native => {
-                    return self.t.native == other.t.native;
-                },
-                else => return false,
-            },
-            .closure => switch (other.t) {
-                .closure => {
-                    return self.t.closure == other.t.closure;
-                },
-                else => return false,
-            },
-        }
+        return std.meta.eql(self.t, other.t);
     }
 
     pub fn as_string(self: *Obj) *ObjString {
