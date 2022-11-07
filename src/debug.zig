@@ -39,6 +39,7 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         .print => simple_instruction("PRINT", offset),
         .pop => simple_instruction("POP", offset),
         .call => byte_instruction("CALL", c, offset),
+        .closure => closure_instruction("CLOSURE", c, offset),
 
         // literals
         .nil => simple_instruction("NIL", offset),
@@ -71,10 +72,18 @@ pub fn simple_instruction(name: []const u8, offset: usize) usize {
 pub fn constant_instruction(name: []const u8, c: *Chunk, offset: usize) usize {
     const constant_idx: usize = c.code.items[offset + 1];
     std.debug.print(
-        "{s: <16} {d: >4} '{}'",
+        "{s: <16} {d: >4} '{}'\n",
         .{ name, constant_idx, c.constants.values.items[constant_idx] },
     );
-    std.debug.print("\n", .{});
+    return offset + 2;
+}
+
+pub fn closure_instruction(name: []const u8, c: *Chunk, offset: usize) usize {
+    const constant_idx: usize = c.code.items[offset + 1];
+    std.debug.print(
+        "{s: <16} {d: >4} '{}'\n",
+        .{ name, constant_idx, c.constants.values.items[constant_idx] },
+    );
     return offset + 2;
 }
 

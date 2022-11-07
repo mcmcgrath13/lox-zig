@@ -12,6 +12,7 @@ pub const ObjType = union(enum) {
     string: *ObjString,
     function: *ObjFunction,
     native: *ObjNative,
+    closure: *ObjClosure,
 
     pub fn string(obj: *ObjString) ObjType {
         return ObjType{ .string = obj };
@@ -25,6 +26,10 @@ pub const ObjType = union(enum) {
         return ObjType{ .native = obj };
     }
 
+    pub fn closure(obj: *ObjClosure) ObjType {
+        return ObjType{ .closure = obj };
+    }
+
     pub fn deinit(self: *ObjType, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .string => free_objstr(self.string, allocator),
@@ -35,6 +40,9 @@ pub const ObjType = union(enum) {
             },
             .native => {
                 allocator.destroy(self.native);
+            },
+            .closure => {
+                allocator.destroy(self.closure);
             },
         }
     }
@@ -87,6 +95,12 @@ pub const Obj = struct {
                 },
                 else => return false,
             },
+            .closure => switch (other.t) {
+                .closure => {
+                    return self.t.closure == other.t.closure;
+                },
+                else => return false,
+            },
         }
     }
 
@@ -111,6 +125,13 @@ pub const Obj = struct {
         }
     }
 
+    pub fn as_closure(self: *Obj) *ObjClosure {
+        switch (self.t) {
+            .closure => return self.t.closure,
+            else => unreachable,
+        }
+    }
+
     pub fn format(
         self: Obj,
         comptime fmt: []const u8,
@@ -124,6 +145,7 @@ pub const Obj = struct {
             .string => try writer.print("\"{s}\"", .{self.t.string}),
             .function => try writer.print("{}", .{self.t.function}),
             .native => try writer.print("{}", .{self.t.native}),
+            .closure => try writer.print("{}", .{self.t.closure}),
         }
     }
 };
@@ -279,6 +301,39 @@ pub fn new_function(
     var objfunc = common.create_or_die(allocator, ObjFunction);
     objfunc.* = ObjFunction.init(allocator);
     var objt = ObjType.function(objfunc);
+    return alloc_obj(objt, objects, allocator);
+}
+
+// =========== OBJ CLOSURE ============
+
+pub const ObjClosure = struct {
+    function: *ObjFunction,
+
+    pub fn init(function: *ObjFunction) ObjClosure {
+        return ObjClosure{ .function = function };
+    }
+
+    pub fn format(
+        self: ObjClosure,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        try writer.print("{}", .{self.function});
+    }
+};
+
+pub fn new_closure(
+    function: *ObjFunction,
+    objects: *?*Obj,
+    allocator: std.mem.Allocator,
+) *Obj {
+    var objclosure = common.create_or_die(allocator, ObjClosure);
+    objclosure.* = ObjClosure.init(function);
+    var objt = ObjType.closure(objclosure);
     return alloc_obj(objt, objects, allocator);
 }
 

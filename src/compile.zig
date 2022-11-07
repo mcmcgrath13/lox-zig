@@ -571,7 +571,10 @@ pub const Compiler = struct {
         function_compiler.block();
 
         var function_obj = function_compiler.end();
-        self.emit_constant(Value.obj(function_obj));
+        self.emit_compound(
+            OpCode.closure,
+            self.make_constant(Value.obj(function_obj)),
+        );
     }
 
     fn var_declaration(self: *Compiler) void {

@@ -20,6 +20,7 @@ pub const OpCode = enum(u8) {
     print,
     pop,
     call,
+    closure,
 
     // literals
     nil,
