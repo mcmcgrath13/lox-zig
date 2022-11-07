@@ -13,6 +13,7 @@ pub const ObjType = union(enum) {
     function: *ObjFunction,
     native: *ObjNative,
     closure: *ObjClosure,
+    upvalue: *ObjUpValue,
 
     pub fn string(obj: *ObjString) ObjType {
         return ObjType{ .string = obj };
@@ -30,6 +31,10 @@ pub const ObjType = union(enum) {
         return ObjType{ .closure = obj };
     }
 
+    pub fn upvalue(obj: *ObjUpValue) ObjType {
+        return ObjType{ .upvalue = obj };
+    }
+
     pub fn deinit(self: *ObjType, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .string => free_objstr(self.string, allocator),
@@ -42,7 +47,11 @@ pub const ObjType = union(enum) {
                 allocator.destroy(self.native);
             },
             .closure => {
+                self.closure.deinit(allocator);
                 allocator.destroy(self.closure);
+            },
+            .upvalue => {
+                allocator.destroy(self.upvalue);
             },
         }
     }
@@ -107,6 +116,13 @@ pub const Obj = struct {
         }
     }
 
+    pub fn as_upvalue(self: *Obj) *ObjUpValue {
+        switch (self.t) {
+            .upvalue => return self.t.upvalue,
+            else => unreachable,
+        }
+    }
+
     pub fn format(
         self: Obj,
         comptime fmt: []const u8,
@@ -121,6 +137,7 @@ pub const Obj = struct {
             .function => try writer.print("{}", .{self.t.function}),
             .native => try writer.print("{}", .{self.t.native}),
             .closure => try writer.print("{}", .{self.t.closure}),
+            .upvalue => try writer.print("{}", .{self.t.upvalue}),
         }
     }
 };
@@ -238,6 +255,7 @@ pub fn take_string(
 // ========= OBJ FUNCTION =======
 pub const ObjFunction = struct {
     arity: u8 = 0,
+    upvalue_count: u8 = 0,
     chunk: Chunk,
     name: ?*ObjString = null,
 
@@ -283,9 +301,24 @@ pub fn new_function(
 
 pub const ObjClosure = struct {
     function: *ObjFunction,
+    upvalues: []?*ObjUpValue,
 
-    pub fn init(function: *ObjFunction) ObjClosure {
-        return ObjClosure{ .function = function };
+    pub fn init(
+        function: *ObjFunction,
+        allocator: std.mem.Allocator,
+    ) ObjClosure {
+        var upvalues = common.alloc_or_die(
+            allocator,
+            ?*ObjUpValue,
+            function.upvalue_count,
+        );
+        std.mem.set(?*ObjUpValue, upvalues, null);
+
+        return ObjClosure{ .function = function, .upvalues = upvalues };
+    }
+
+    pub fn deinit(self: *ObjClosure, allocator: std.mem.Allocator) void {
+        allocator.free(self.upvalues);
     }
 
     pub fn format(
@@ -307,8 +340,40 @@ pub fn new_closure(
     allocator: std.mem.Allocator,
 ) *Obj {
     var objclosure = common.create_or_die(allocator, ObjClosure);
-    objclosure.* = ObjClosure.init(function);
+    objclosure.* = ObjClosure.init(function, allocator);
     var objt = ObjType.closure(objclosure);
+    return alloc_obj(objt, objects, allocator);
+}
+
+// ============ OBJ UPVALUE ============
+pub const ObjUpValue = struct {
+    location: *Value,
+
+    pub fn init(location: *Value) ObjUpValue {
+        return ObjUpValue{ .location = location };
+    }
+
+    pub fn format(
+        self: ObjUpValue,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        try writer.print("upvalue: {}", .{self.location});
+    }
+};
+
+pub fn new_upvalue(
+    location: *Value,
+    objects: *?*Obj,
+    allocator: std.mem.Allocator,
+) *Obj {
+    var objupvalue = common.create_or_die(allocator, ObjUpValue);
+    objupvalue.* = ObjUpValue.init(location);
+    var objt = ObjType.upvalue(objupvalue);
     return alloc_obj(objt, objects, allocator);
 }
 

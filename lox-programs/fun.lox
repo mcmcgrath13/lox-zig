@@ -16,6 +16,15 @@ fun fib(n) {
   return fib(n - 2) + fib(n - 1);
 }
 
-var start = clock();
-print fib(20);
-print clock() - start;
+// var start = clock();
+// print fib(20);
+// print clock() - start;
+
+fun outer() {
+  var x = "outside";
+  fun inner() {
+    print x;
+  }
+  inner();
+}
+outer();

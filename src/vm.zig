@@ -21,6 +21,8 @@ const new_native = obj.new_native;
 const NativeFn = obj.NativeFn;
 const ObjClosure = obj.ObjClosure;
 const new_closure = obj.new_closure;
+const ObjUpValue = obj.ObjUpValue;
+const new_upvalue = obj.new_upvalue;
 
 const common = @import("common.zig");
 
@@ -233,6 +235,14 @@ pub const VM = struct {
                     const idx = frame.read_byte();
                     self.stack[frame.slots_start + idx] = self.peek(0);
                 },
+                .get_upvalue => {
+                    const slot = frame.read_byte();
+                    self.push(frame.closure.upvalues[slot].?.location.*);
+                },
+                .set_upvalue => {
+                    const slot = frame.read_byte();
+                    frame.closure.upvalues[slot].?.location.* = self.peek(0);
+                },
                 .jump_if_false => {
                     const jump = frame.read_short();
                     if (self.peek(0).is_falsey()) {
@@ -274,6 +284,15 @@ pub const VM = struct {
                     var fun = frame.read_constant().as_obj().as_function();
                     var closure = new_closure(fun, &self.objects, self.allocator);
                     self.push(Value.obj(closure));
+                    for (closure.as_closure().upvalues) |*upvalue| {
+                        const is_local = frame.read_byte();
+                        const index = frame.read_byte();
+                        if (is_local == 1) {
+                            upvalue.* = self.capture_upvalue(frame.slots_start + index);
+                        } else {
+                            upvalue.* = frame.closure.upvalues[index];
+                        }
+                    }
                 },
 
                 // literals
@@ -380,6 +399,11 @@ pub const VM = struct {
         }
         self.runtime_error("can only call functions and classes\n", .{});
         return InterpretError.runtime;
+    }
+
+    fn capture_upvalue(self: *VM, idx: usize) *ObjUpValue {
+        _ = self;
+        return new_upvalue(&self.stack[idx], &self.objects, self.allocator).as_upvalue();
     }
 
     fn define_native(
