@@ -22,7 +22,11 @@ const alloc_string = obj.alloc_string;
 const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
 
 const compile_err = error.CompileFailed;
-const local_not_found = error.LocalNotFound;
+
+const NotFoundError = error{
+    local,
+    upvalue,
+};
 
 const HIGH_BYTE: u8 = 0xff;
 
@@ -127,6 +131,12 @@ pub fn compile(
 const Local = struct {
     token: Token,
     depth: ?u8 = null,
+    is_captured: bool = false,
+};
+
+const UpValue = struct {
+    is_local: bool,
+    index: u8,
 };
 
 const FunctionType = enum {
@@ -150,6 +160,10 @@ pub const Compiler = struct {
     locals: [std.math.maxInt(u8)]Local = undefined,
     local_count: u8 = 0,
     scope_depth: u8 = 0,
+
+    upvalues: [std.math.maxInt(u8)]UpValue = undefined,
+
+    enclosing: ?*Compiler = null,
 
     pub fn init(
         function_type: FunctionType,
@@ -195,7 +209,7 @@ pub const Compiler = struct {
         self: *Compiler,
         function_type: FunctionType,
     ) Compiler {
-        return Compiler.init(
+        var comp = Compiler.init(
             function_type,
             self.parser,
             self.allocator,
@@ -203,6 +217,8 @@ pub const Compiler = struct {
             self.objects,
             self.strings,
         );
+        comp.enclosing = self;
+        return comp;
     }
 
     pub fn compile(self: *Compiler) !*Obj {
@@ -321,9 +337,13 @@ pub const Compiler = struct {
         var get_op = OpCode.get_local;
         var set_op = OpCode.set_local;
         var arg = self.resolve_local(token) catch blk: {
-            get_op = OpCode.get_global;
-            set_op = OpCode.set_global;
-            break :blk self.identifier_constant(token);
+            get_op = OpCode.get_upvalue;
+            set_op = OpCode.set_upvalue;
+            break :blk self.resolve_upvalue(token) catch inner: {
+                get_op = OpCode.get_global;
+                set_op = OpCode.set_global;
+                break :inner self.identifier_constant(token);
+            };
         };
 
         if (can_assign and self.parser.match(TokenType.equal)) {
@@ -571,7 +591,16 @@ pub const Compiler = struct {
         function_compiler.block();
 
         var function_obj = function_compiler.end();
-        self.emit_constant(Value.obj(function_obj));
+        self.emit_compound(
+            OpCode.closure,
+            self.make_constant(Value.obj(function_obj)),
+        );
+
+        var i: u8 = 0;
+        while (i < function_obj.as_function().upvalue_count) : (i += 1) {
+            self.emit_byte(if (function_compiler.upvalues[i].is_local) 1 else 0);
+            self.emit_byte(function_compiler.upvalues[i].index);
+        }
     }
 
     fn var_declaration(self: *Compiler) void {
@@ -684,7 +713,40 @@ pub const Compiler = struct {
             }
         }
 
-        return local_not_found;
+        return NotFoundError.local;
+    }
+
+    fn resolve_upvalue(self: *Compiler, token: Token) NotFoundError!u8 {
+        if (self.enclosing == null) return NotFoundError.upvalue;
+
+        const local_idx = self.enclosing.?.resolve_local(token) catch {
+            const upvalue = try self.enclosing.?.resolve_upvalue(token);
+            return self.add_upvalue(upvalue, false);
+        };
+
+        self.enclosing.?.locals[local_idx].is_captured = true;
+        return self.add_upvalue(local_idx, true);
+    }
+
+    fn add_upvalue(self: *Compiler, index: u8, is_local: bool) u8 {
+        const upvalue_count = self.function.as_function().upvalue_count;
+        var i: u8 = 0;
+        while (i < upvalue_count) : (i += 1) {
+            var upvalue = &self.upvalues[i];
+            if (upvalue.index == index and upvalue.is_local == is_local) {
+                return i;
+            }
+        }
+
+        if (i == std.math.maxInt(u8)) {
+            self.parser.error_at_previous("too many closure variables in function");
+            return 0;
+        }
+
+        self.upvalues[upvalue_count].is_local = is_local;
+        self.upvalues[upvalue_count].index = index;
+        self.function.as_function().upvalue_count += 1;
+        return upvalue_count;
     }
 
     // Writing Byte Code to chunk helper methods
@@ -764,8 +826,13 @@ pub const Compiler = struct {
     fn end_scope(self: *Compiler) void {
         self.scope_depth -= 1;
 
-        while (self.local_count > 0 and self.locals[self.local_count - 1].depth.? > self.scope_depth) {
-            self.emit_opcode(OpCode.pop);
+        var local = self.locals[self.local_count - 1];
+        while (self.local_count > 0 and local.depth != null and local.depth.? > self.scope_depth) : (local = self.locals[self.local_count - 1]) {
+            if (local.is_captured) {
+                self.emit_opcode(OpCode.close_upvalue);
+            } else {
+                self.emit_opcode(OpCode.pop);
+            }
             self.local_count -= 1;
         }
     }

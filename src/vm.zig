@@ -14,12 +14,15 @@ const disassemble_instruction = @import("debug.zig").disassemble_instruction;
 
 const obj = @import("object.zig");
 const Obj = obj.Obj;
-const ObjFunction = obj.ObjFunction;
 const new_string = obj.new_string;
 const ObjString = obj.ObjString;
 const ObjStringContext = obj.ObjStringContext;
 const new_native = obj.new_native;
 const NativeFn = obj.NativeFn;
+const ObjClosure = obj.ObjClosure;
+const new_closure = obj.new_closure;
+const ObjUpValue = obj.ObjUpValue;
+const new_upvalue = obj.new_upvalue;
 
 const common = @import("common.zig");
 
@@ -41,12 +44,12 @@ pub const InterpretError = error{
 };
 
 const CallFrame = struct {
-    function: *ObjFunction,
+    closure: *ObjClosure,
     ip: [*]u8,
     slots_start: usize,
 
-    fn init(function: *ObjFunction, slots_start: usize) CallFrame {
-        return .{ .function = function, .ip = function.chunk.code.items.ptr, .slots_start = slots_start };
+    fn init(closure: *ObjClosure, slots_start: usize) CallFrame {
+        return .{ .closure = closure, .ip = closure.function.chunk.code.items.ptr, .slots_start = slots_start };
     }
 
     fn read_byte(self: *CallFrame) u8 {
@@ -56,7 +59,7 @@ const CallFrame = struct {
     }
 
     fn read_constant(self: *CallFrame) Value {
-        return self.function.chunk.constants.values.items[self.read_byte()];
+        return self.closure.function.chunk.constants.values.items[self.read_byte()];
     }
 
     fn read_short(self: *CallFrame) u16 {
@@ -75,6 +78,7 @@ pub const VM = struct {
     stack_top: usize = 0,
 
     objects: ?*Obj = null,
+    open_upvalues: ?*ObjUpValue = null,
     strings: ObjStringHashMap,
 
     globals: VariableHashMap,
@@ -132,11 +136,11 @@ pub const VM = struct {
         return self.stack[self.stack_top - 1 - distance];
     }
 
-    fn call(self: *VM, function: *ObjFunction, arg_count: u8) !void {
-        if (arg_count != function.arity) {
+    fn call(self: *VM, closure: *ObjClosure, arg_count: u8) !void {
+        if (arg_count != closure.function.arity) {
             self.runtime_error(
                 "expected {d} arguments, but got {d}\n",
-                .{ function.arity, arg_count },
+                .{ closure.function.arity, arg_count },
             );
         }
 
@@ -148,7 +152,7 @@ pub const VM = struct {
         var frame = &self.frames[self.frame_count];
         self.frame_count += 1;
 
-        frame.* = CallFrame.init(function, self.stack_top - arg_count - 1);
+        frame.* = CallFrame.init(closure, self.stack_top - arg_count - 1);
     }
 
     pub fn interpret(self: *VM, source: []const u8) InterpretError!void {
@@ -163,7 +167,14 @@ pub const VM = struct {
         };
 
         self.push(Value.obj(function_obj));
-        try self.call(function_obj.as_function(), 0);
+        var closure_obj = new_closure(
+            function_obj.as_function(),
+            &self.objects,
+            self.allocator,
+        );
+        _ = self.pop();
+        self.push(Value.obj(closure_obj));
+        try self.call(closure_obj.as_closure(), 0);
 
         return self.run();
     }
@@ -183,7 +194,7 @@ pub const VM = struct {
                 }
                 std.debug.print("\n", .{});
 
-                _ = disassemble_instruction(&frame.function.chunk, @ptrToInt(frame.ip) - @ptrToInt(frame.function.chunk.code.items.ptr));
+                _ = disassemble_instruction(&frame.closure.function.chunk, @ptrToInt(frame.ip) - @ptrToInt(frame.closure.function.chunk.code.items.ptr));
             }
             const instruction = frame.read_byte();
             try switch (@intToEnum(OpCode, instruction)) {
@@ -225,6 +236,18 @@ pub const VM = struct {
                     const idx = frame.read_byte();
                     self.stack[frame.slots_start + idx] = self.peek(0);
                 },
+                .get_upvalue => {
+                    const slot = frame.read_byte();
+                    self.push(frame.closure.upvalues[slot].?.location.*);
+                },
+                .set_upvalue => {
+                    const slot = frame.read_byte();
+                    frame.closure.upvalues[slot].?.location.* = self.peek(0);
+                },
+                .close_upvalue => {
+                    self.close_upvalues(&self.stack[self.stack_top - 1]);
+                    _ = self.pop();
+                },
                 .jump_if_false => {
                     const jump = frame.read_short();
                     if (self.peek(0).is_falsey()) {
@@ -241,6 +264,7 @@ pub const VM = struct {
                 },
                 ._return => {
                     const result = self.pop();
+                    self.close_upvalues(&self.stack[frame.slots_start]);
                     self.frame_count -= 1;
                     if (self.frame_count == 0) {
                         _ = self.pop();
@@ -261,6 +285,20 @@ pub const VM = struct {
                     const arg_count = frame.read_byte();
                     try self.call_value(self.peek(arg_count), arg_count);
                     frame = self.current_frame();
+                },
+                .closure => {
+                    var fun = frame.read_constant().as_obj().as_function();
+                    var closure = new_closure(fun, &self.objects, self.allocator);
+                    self.push(Value.obj(closure));
+                    for (closure.as_closure().upvalues) |*upvalue| {
+                        const is_local = frame.read_byte();
+                        const index = frame.read_byte();
+                        if (is_local == 1) {
+                            upvalue.* = self.capture_upvalue(&self.stack[frame.slots_start + index]);
+                        } else {
+                            upvalue.* = frame.closure.upvalues[index];
+                        }
+                    }
                 },
 
                 // literals
@@ -348,8 +386,8 @@ pub const VM = struct {
         if (callee.is_obj()) {
             var obj_val = callee.as_obj();
             switch (obj_val.t) {
-                .function => {
-                    return self.call(obj_val.as_function(), arg_count);
+                .closure => {
+                    return self.call(obj_val.as_closure(), arg_count);
                 },
                 .native => {
                     const native = obj_val.as_native();
@@ -358,7 +396,7 @@ pub const VM = struct {
                         arg_count,
                         stack_ptr + self.stack_top - arg_count,
                     );
-                    self.stack_top -= arg_count;
+                    self.stack_top -= arg_count + 1;
                     self.push(result);
                     return;
                 },
@@ -367,6 +405,37 @@ pub const VM = struct {
         }
         self.runtime_error("can only call functions and classes\n", .{});
         return InterpretError.runtime;
+    }
+
+    fn capture_upvalue(self: *VM, value: *Value) *ObjUpValue {
+        var prev: ?*ObjUpValue = null;
+        var upvalue = self.open_upvalues;
+        while (upvalue != null and @ptrToInt(upvalue.?.location) > @ptrToInt(value)) {
+            prev = upvalue;
+            upvalue = upvalue.?.next;
+        }
+        if (upvalue != null and upvalue.?.location == value) {
+            return upvalue.?;
+        }
+
+        var created_upvalue = new_upvalue(value, &self.objects, self.allocator).as_upvalue();
+        created_upvalue.next = upvalue;
+        if (prev) |uv| {
+            uv.next = created_upvalue;
+        } else {
+            self.open_upvalues = created_upvalue;
+        }
+
+        return created_upvalue;
+    }
+
+    fn close_upvalues(self: *VM, last: *Value) void {
+        while (self.open_upvalues != null and @ptrToInt(self.open_upvalues.?) > @ptrToInt(last)) {
+            var upvalue = self.open_upvalues.?;
+            upvalue.closed = upvalue.location.*;
+            upvalue.location = &upvalue.closed;
+            self.open_upvalues = upvalue.next;
+        }
     }
 
     fn define_native(
@@ -404,9 +473,10 @@ pub const VM = struct {
         var i = self.frame_count;
         while (i >= 0) : (i -= 1) {
             const frame = self.frames[i - 1];
-            const instruction: usize = @ptrToInt(frame.ip) - @ptrToInt(frame.function.chunk.code.items.ptr) - 1;
-            const line: usize = frame.function.chunk.lines.items[instruction];
-            std.debug.print("[line {d}] in {}\n", .{ line, frame.function });
+            const chunk = frame.closure.function.chunk;
+            const instruction: usize = @ptrToInt(frame.ip) - @ptrToInt(chunk.code.items.ptr) - 1;
+            const line: usize = chunk.lines.items[instruction];
+            std.debug.print("[line {d}] in {}\n", .{ line, frame.closure });
         }
 
         self.reset_stack();

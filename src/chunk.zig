@@ -13,6 +13,9 @@ pub const OpCode = enum(u8) {
     set_global,
     get_local,
     set_local,
+    get_upvalue,
+    set_upvalue,
+    close_upvalue,
     jump_if_false,
     jump,
     loop,
@@ -20,6 +23,7 @@ pub const OpCode = enum(u8) {
     print,
     pop,
     call,
+    closure,
 
     // literals
     nil,

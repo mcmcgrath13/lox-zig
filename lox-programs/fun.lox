@@ -17,5 +17,33 @@ fun fib(n) {
 }
 
 var start = clock();
-print fib(35);
+print fib(3);
 print clock() - start;
+
+fun outer() {
+  var x = "outside";
+  fun inner() {
+    print x;
+  }
+  inner();
+}
+outer();
+
+{
+  var a = 1;
+  fun f() {
+    print a;
+  }
+  var b = 2;
+  fun g() {
+    print b;
+  }
+  var c = 3;
+  fun h() {
+    print c;
+  }
+  
+  f();
+  g();
+  h();
+}

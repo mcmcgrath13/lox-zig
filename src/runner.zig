@@ -20,7 +20,7 @@ pub fn main() anyerror!void {
     defer std.process.argsFree(allocator, args);
 
     // TODO: put debug bool behind an args flag
-    const debug = false;
+    const debug = true;
     var vm = lox.VM.init(debug, allocator);
     defer vm.deinit();
 

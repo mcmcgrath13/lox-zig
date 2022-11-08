@@ -32,6 +32,9 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         .set_global => constant_instruction("SET_GLOBAL", c, offset),
         .get_local => byte_instruction("GET_LOCAL", c, offset),
         .set_local => byte_instruction("SET_LOCAL", c, offset),
+        .get_upvalue => byte_instruction("GET_UPVALUE", c, offset),
+        .set_upvalue => byte_instruction("SET_UPVALUE", c, offset),
+        .close_upvalue => simple_instruction("CLOSE_UPVALUE", offset),
         .jump_if_false => jump_instruction("JUMP_IF_FALSE", true, c, offset),
         .jump => jump_instruction("JUMP", true, c, offset),
         .loop => jump_instruction("LOOP", false, c, offset),
@@ -39,6 +42,7 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         .print => simple_instruction("PRINT", offset),
         .pop => simple_instruction("POP", offset),
         .call => byte_instruction("CALL", c, offset),
+        .closure => closure_instruction("CLOSURE", c, offset),
 
         // literals
         .nil => simple_instruction("NIL", offset),
@@ -71,11 +75,38 @@ pub fn simple_instruction(name: []const u8, offset: usize) usize {
 pub fn constant_instruction(name: []const u8, c: *Chunk, offset: usize) usize {
     const constant_idx: usize = c.code.items[offset + 1];
     std.debug.print(
-        "{s: <16} {d: >4} '{}'",
+        "{s: <16} {d: >4} '{}'\n",
         .{ name, constant_idx, c.constants.values.items[constant_idx] },
     );
-    std.debug.print("\n", .{});
     return offset + 2;
+}
+
+pub fn closure_instruction(
+    name: []const u8,
+    c: *Chunk,
+    original_offset: usize,
+) usize {
+    var offset = original_offset + 1;
+    const constant_idx: usize = c.code.items[offset];
+    std.debug.print(
+        "{s: <16} {d: >4} '{}'\n",
+        .{ name, constant_idx, c.constants.values.items[constant_idx] },
+    );
+    offset += 1;
+
+    var function = c.constants.values.items[constant_idx].as_obj().as_function();
+    var i: u8 = 0;
+    while (i < function.upvalue_count) : (i += 1) {
+        const is_local = if (c.code.items[offset] == 1) "local" else "upvalue";
+        const index = c.code.items[offset + 1];
+        std.debug.print(
+            "{d:0>4}      |                     {s} {d}\n",
+            .{ offset, is_local, index },
+        );
+        offset += 2;
+    }
+
+    return offset;
 }
 
 fn byte_instruction(name: []const u8, c: *Chunk, offset: usize) usize {
