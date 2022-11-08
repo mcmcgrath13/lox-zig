@@ -348,6 +348,8 @@ pub fn new_closure(
 // ============ OBJ UPVALUE ============
 pub const ObjUpValue = struct {
     location: *Value,
+    closed: Value = Value.nil(),
+    next: ?*ObjUpValue = null,
 
     pub fn init(location: *Value) ObjUpValue {
         return ObjUpValue{ .location = location };

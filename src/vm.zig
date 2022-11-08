@@ -78,6 +78,7 @@ pub const VM = struct {
     stack_top: usize = 0,
 
     objects: ?*Obj = null,
+    open_upvalues: ?*ObjUpValue = null,
     strings: ObjStringHashMap,
 
     globals: VariableHashMap,
@@ -243,6 +244,10 @@ pub const VM = struct {
                     const slot = frame.read_byte();
                     frame.closure.upvalues[slot].?.location.* = self.peek(0);
                 },
+                .close_upvalue => {
+                    self.close_upvalues(&self.stack[self.stack_top - 1]);
+                    _ = self.pop();
+                },
                 .jump_if_false => {
                     const jump = frame.read_short();
                     if (self.peek(0).is_falsey()) {
@@ -259,6 +264,7 @@ pub const VM = struct {
                 },
                 ._return => {
                     const result = self.pop();
+                    self.close_upvalues(&self.stack[frame.slots_start]);
                     self.frame_count -= 1;
                     if (self.frame_count == 0) {
                         _ = self.pop();
@@ -288,7 +294,7 @@ pub const VM = struct {
                         const is_local = frame.read_byte();
                         const index = frame.read_byte();
                         if (is_local == 1) {
-                            upvalue.* = self.capture_upvalue(frame.slots_start + index);
+                            upvalue.* = self.capture_upvalue(&self.stack[frame.slots_start + index]);
                         } else {
                             upvalue.* = frame.closure.upvalues[index];
                         }
@@ -390,7 +396,7 @@ pub const VM = struct {
                         arg_count,
                         stack_ptr + self.stack_top - arg_count,
                     );
-                    self.stack_top -= arg_count;
+                    self.stack_top -= arg_count + 1;
                     self.push(result);
                     return;
                 },
@@ -401,9 +407,35 @@ pub const VM = struct {
         return InterpretError.runtime;
     }
 
-    fn capture_upvalue(self: *VM, idx: usize) *ObjUpValue {
-        _ = self;
-        return new_upvalue(&self.stack[idx], &self.objects, self.allocator).as_upvalue();
+    fn capture_upvalue(self: *VM, value: *Value) *ObjUpValue {
+        var prev: ?*ObjUpValue = null;
+        var upvalue = self.open_upvalues;
+        while (upvalue != null and @ptrToInt(upvalue.?.location) > @ptrToInt(value)) {
+            prev = upvalue;
+            upvalue = upvalue.?.next;
+        }
+        if (upvalue != null and upvalue.?.location == value) {
+            return upvalue.?;
+        }
+
+        var created_upvalue = new_upvalue(value, &self.objects, self.allocator).as_upvalue();
+        created_upvalue.next = upvalue;
+        if (prev) |uv| {
+            uv.next = created_upvalue;
+        } else {
+            self.open_upvalues = created_upvalue;
+        }
+
+        return created_upvalue;
+    }
+
+    fn close_upvalues(self: *VM, last: *Value) void {
+        while (self.open_upvalues != null and @ptrToInt(self.open_upvalues.?) > @ptrToInt(last)) {
+            var upvalue = self.open_upvalues.?;
+            upvalue.closed = upvalue.location.*;
+            upvalue.location = &upvalue.closed;
+            self.open_upvalues = upvalue.next;
+        }
     }
 
     fn define_native(

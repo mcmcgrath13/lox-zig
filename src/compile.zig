@@ -131,6 +131,7 @@ pub fn compile(
 const Local = struct {
     token: Token,
     depth: ?u8 = null,
+    is_captured: bool = false,
 };
 
 const UpValue = struct {
@@ -723,6 +724,7 @@ pub const Compiler = struct {
             return self.add_upvalue(upvalue, false);
         };
 
+        self.enclosing.?.locals[local_idx].is_captured = true;
         return self.add_upvalue(local_idx, true);
     }
 
@@ -824,8 +826,13 @@ pub const Compiler = struct {
     fn end_scope(self: *Compiler) void {
         self.scope_depth -= 1;
 
-        while (self.local_count > 0 and self.locals[self.local_count - 1].depth.? > self.scope_depth) {
-            self.emit_opcode(OpCode.pop);
+        var local = self.locals[self.local_count - 1];
+        while (self.local_count > 0 and local.depth != null and local.depth.? > self.scope_depth) : (local = self.locals[self.local_count - 1]) {
+            if (local.is_captured) {
+                self.emit_opcode(OpCode.close_upvalue);
+            } else {
+                self.emit_opcode(OpCode.pop);
+            }
             self.local_count -= 1;
         }
     }

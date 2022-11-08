@@ -34,6 +34,7 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         .set_local => byte_instruction("SET_LOCAL", c, offset),
         .get_upvalue => byte_instruction("GET_UPVALUE", c, offset),
         .set_upvalue => byte_instruction("SET_UPVALUE", c, offset),
+        .close_upvalue => simple_instruction("CLOSE_UPVALUE", offset),
         .jump_if_false => jump_instruction("JUMP_IF_FALSE", true, c, offset),
         .jump => jump_instruction("JUMP", true, c, offset),
         .loop => jump_instruction("LOOP", false, c, offset),
