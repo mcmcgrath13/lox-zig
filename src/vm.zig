@@ -10,6 +10,8 @@ const Value = vlu.Value;
 
 const compile = @import("compile.zig").compile;
 
+const GCAllocator = @import("gc.zig").GCAllocator;
+
 const disassemble_instruction = @import("debug.zig").disassemble_instruction;
 
 const obj = @import("object.zig");
@@ -41,6 +43,22 @@ pub const VariableHashMap = std.AutoHashMap(*ObjString, Value);
 pub const InterpretError = error{
     compile,
     runtime,
+};
+
+pub const Options = struct {
+    debug_runtime: bool = false,
+    debug_compiler: bool = false,
+    debug_stress_gc: bool = false,
+    debug_gc: bool = false,
+
+    pub fn init_all() Options {
+        return Options{
+            .debug_runtime = true,
+            .debug_compiler = true,
+            .debug_stress_gc = true,
+            .debug_gc = true,
+        };
+    }
 };
 
 const CallFrame = struct {
@@ -83,14 +101,19 @@ pub const VM = struct {
 
     globals: VariableHashMap,
 
-    debug: bool = false,
+    options: Options,
 
-    pub fn init(debug: bool, allocator: std.mem.Allocator) VM {
-        const strings = ObjStringHashMap.init(allocator);
-        const globals = VariableHashMap.init(allocator);
+    pub fn init(options: Options, allocator: std.mem.Allocator) VM {
+        const gc_allocator = GCAllocator.init(
+            allocator,
+            options.debug_stress_gc,
+            options.debug_gc,
+        ).allocator();
+        const strings = ObjStringHashMap.init(gc_allocator);
+        const globals = VariableHashMap.init(gc_allocator);
         var vm = VM{
-            .debug = debug,
-            .allocator = allocator,
+            .options = options,
+            .allocator = gc_allocator,
             .strings = strings,
             .globals = globals,
         };
@@ -159,7 +182,7 @@ pub const VM = struct {
         var function_obj = compile(
             source,
             self.allocator,
-            self.debug,
+            self.options.debug_compiler,
             &self.objects,
             &self.strings,
         ) catch {
@@ -183,7 +206,7 @@ pub const VM = struct {
         var frame = self.current_frame();
 
         while (true) {
-            if (self.debug) {
+            if (self.options.debug_runtime) {
                 // print stack
                 std.debug.print("          ", .{});
                 for (self.stack) |value, i| {
