@@ -10,6 +10,8 @@ const Value = vlu.Value;
 
 const compile = @import("compile.zig").compile;
 
+const GCAllocator = @import("gc.zig").GCAllocator;
+
 const disassemble_instruction = @import("debug.zig").disassemble_instruction;
 
 const obj = @import("object.zig");
@@ -41,6 +43,22 @@ pub const VariableHashMap = std.AutoHashMap(*ObjString, Value);
 pub const InterpretError = error{
     compile,
     runtime,
+};
+
+pub const Options = struct {
+    debug_runtime: bool = false,
+    debug_compiler: bool = false,
+    debug_stress_gc: bool = false,
+    debug_gc: bool = false,
+
+    pub fn init_all() Options {
+        return Options{
+            .debug_runtime = true,
+            .debug_compiler = true,
+            .debug_stress_gc = true,
+            .debug_gc = true,
+        };
+    }
 };
 
 const CallFrame = struct {
@@ -83,14 +101,17 @@ pub const VM = struct {
 
     globals: VariableHashMap,
 
-    debug: bool = false,
+    options: Options,
 
-    pub fn init(debug: bool, allocator: std.mem.Allocator) VM {
-        const strings = ObjStringHashMap.init(allocator);
-        const globals = VariableHashMap.init(allocator);
+    compiling: bool = false,
+
+    pub fn init(options: Options, gc: *GCAllocator) VM {
+        const gc_allocator = gc.allocator();
+        const strings = ObjStringHashMap.init(gc_allocator);
+        const globals = VariableHashMap.init(gc_allocator);
         var vm = VM{
-            .debug = debug,
-            .allocator = allocator,
+            .options = options,
+            .allocator = gc_allocator,
             .strings = strings,
             .globals = globals,
         };
@@ -156,15 +177,17 @@ pub const VM = struct {
     }
 
     pub fn interpret(self: *VM, source: []const u8) InterpretError!void {
+        self.compiling = true;
         var function_obj = compile(
             source,
             self.allocator,
-            self.debug,
+            self.options.debug_compiler,
             &self.objects,
             &self.strings,
         ) catch {
             return InterpretError.compile;
         };
+        self.compiling = false;
 
         self.push(Value.obj(function_obj));
         var closure_obj = new_closure(
@@ -183,7 +206,7 @@ pub const VM = struct {
         var frame = self.current_frame();
 
         while (true) {
-            if (self.debug) {
+            if (self.options.debug_runtime) {
                 // print stack
                 std.debug.print("          ", .{});
                 for (self.stack) |value, i| {
@@ -361,12 +384,14 @@ pub const VM = struct {
     }
 
     fn concatenate(self: *VM) InterpretError!void {
-        const b: []const u8 = self.pop().as_obj().as_string().data;
-        const a: []const u8 = self.pop().as_obj().as_string().data;
+        const b: []const u8 = self.peek(0).as_obj().as_string().data;
+        const a: []const u8 = self.peek(1).as_obj().as_string().data;
         const data = std.mem.concat(self.allocator, u8, &[_][]const u8{ a, b }) catch {
             self.runtime_error("out of memory\n", .{});
             return InterpretError.runtime;
         };
+        _ = self.pop();
+        _ = self.pop();
         self.push(
             Value.obj(new_string(
                 &self.strings,

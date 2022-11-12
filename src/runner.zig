@@ -20,8 +20,9 @@ pub fn main() anyerror!void {
     defer std.process.argsFree(allocator, args);
 
     // TODO: put debug bool behind an args flag
-    const debug = true;
-    var vm = lox.VM.init(debug, allocator);
+    var options = lox.Options.init_all();
+    // options.debug_stress_gc = false;
+    var vm = lox.Lox.init(options, allocator);
     defer vm.deinit();
 
     switch (args.len) {
@@ -47,7 +48,7 @@ fn next_line(reader: anytype, buffer: []u8) ?[]const u8 {
     }
 }
 
-fn repl(vm: *lox.VM) void {
+fn repl(vm: *lox.Lox) void {
     const stdout = std.io.getStdOut();
     const stdin = std.io.getStdIn();
 
@@ -74,7 +75,7 @@ fn repl(vm: *lox.VM) void {
     }
 }
 
-fn run_file(vm: *lox.VM, allocator: std.mem.Allocator, path: []u8) void {
+fn run_file(vm: *lox.Lox, allocator: std.mem.Allocator, path: []u8) void {
     const file = std.fs.cwd().openFile(path, .{}) catch {
         std.debug.print("Could not open file", .{});
         std.process.exit(74);

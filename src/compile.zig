@@ -17,7 +17,6 @@ const obj = @import("object.zig");
 const Obj = obj.Obj;
 const new_function = obj.new_function;
 const new_string = obj.new_string;
-const alloc_string = obj.alloc_string;
 
 const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
 
@@ -195,11 +194,13 @@ pub const Compiler = struct {
         compiler.mark_initialized();
 
         if (function_type != FunctionType.script) {
-            function_obj.as_function().name = alloc_string(
+            function_obj.as_function().name = new_string(
                 strings,
                 parser.previous.start[0..parser.previous.length],
+                objects,
                 allocator,
-            );
+                false,
+            ).as_string();
         }
 
         return compiler;
