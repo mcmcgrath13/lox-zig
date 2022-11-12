@@ -251,7 +251,7 @@ pub fn new_string(
     return alloc_obj(objt, objects, allocator);
 }
 
-pub fn alloc_string(
+fn alloc_string(
     strings: *ObjStringHashMap,
     string: []const u8,
     allocator: std.mem.Allocator,
@@ -260,7 +260,7 @@ pub fn alloc_string(
     return get_or_put_interned_string(strings, &new_objstr, allocator);
 }
 
-pub fn take_string(
+fn take_string(
     strings: *ObjStringHashMap,
     data: []const u8,
     allocator: std.mem.Allocator,
@@ -351,7 +351,7 @@ pub const ObjClosure = struct {
         _ = fmt;
         _ = options;
 
-        try writer.print("{}", .{self.function});
+        try writer.print("{} (closure)", .{self.function});
     }
 };
 

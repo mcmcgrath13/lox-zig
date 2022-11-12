@@ -103,6 +103,8 @@ pub const VM = struct {
 
     options: Options,
 
+    compiling: bool = false,
+
     pub fn init(options: Options, gc: *GCAllocator) VM {
         const gc_allocator = gc.allocator();
         const strings = ObjStringHashMap.init(gc_allocator);
@@ -175,6 +177,7 @@ pub const VM = struct {
     }
 
     pub fn interpret(self: *VM, source: []const u8) InterpretError!void {
+        self.compiling = true;
         var function_obj = compile(
             source,
             self.allocator,
@@ -184,6 +187,7 @@ pub const VM = struct {
         ) catch {
             return InterpretError.compile;
         };
+        self.compiling = false;
 
         self.push(Value.obj(function_obj));
         var closure_obj = new_closure(
@@ -380,12 +384,14 @@ pub const VM = struct {
     }
 
     fn concatenate(self: *VM) InterpretError!void {
-        const b: []const u8 = self.pop().as_obj().as_string().data;
-        const a: []const u8 = self.pop().as_obj().as_string().data;
+        const b: []const u8 = self.peek(0).as_obj().as_string().data;
+        const a: []const u8 = self.peek(0).as_obj().as_string().data;
         const data = std.mem.concat(self.allocator, u8, &[_][]const u8{ a, b }) catch {
             self.runtime_error("out of memory\n", .{});
             return InterpretError.runtime;
         };
+        _ = self.pop();
+        _ = self.pop();
         self.push(
             Value.obj(new_string(
                 &self.strings,

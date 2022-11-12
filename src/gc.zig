@@ -1,11 +1,16 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const ArrayList = std.ArrayList;
 
 const VM = @import("vm.zig").VM;
 
-const Value = @import("value.zig").Value;
+const vlu = @import("value.zig");
+const Value = vlu.Value;
+const ValueArray = vlu.ValueArray;
 
 const Obj = @import("object.zig").Obj;
+
+const common = @import("common.zig");
 
 pub const GCAllocator = struct {
     backing_allocator: Allocator,
@@ -13,6 +18,8 @@ pub const GCAllocator = struct {
 
     debug_stress: bool,
     debug_log: bool,
+
+    gray_stack: ArrayList(*Obj),
 
     pub fn init(
         backing_allocator: Allocator,
@@ -23,7 +30,12 @@ pub const GCAllocator = struct {
             .backing_allocator = backing_allocator,
             .debug_stress = debug_stress,
             .debug_log = debug_log,
+            .gray_stack = ArrayList(*Obj).init(backing_allocator),
         };
+    }
+
+    pub fn deinit(self: *GCAllocator) void {
+        self.gray_stack.deinit();
     }
 
     pub fn allocator(self: *GCAllocator) Allocator {
@@ -31,13 +43,16 @@ pub const GCAllocator = struct {
     }
 
     fn collect_garbage(self: *GCAllocator) void {
-        if (self.vm == null) return;
+        if (self.vm == null or self.vm.?.compiling) return;
 
         if (self.debug_log) {
             std.debug.print("-- gc begin \n", .{});
         }
 
         self.mark_roots();
+        self.trace_references();
+        self.remove_weak_refs();
+        self.sweep();
 
         if (self.debug_log) {
             std.debug.print("-- gc end \n", .{});
@@ -45,11 +60,16 @@ pub const GCAllocator = struct {
     }
 
     fn mark_roots(self: *GCAllocator) void {
+        // the stack
         for (self.vm.?.stack) |*slot, index| {
-            if (index < self.vm.?.stack_top) {
-                self.mark_value(slot);
-            }
+            if (index == self.vm.?.stack_top) break;
+
+            self.mark_value(slot);
         }
+
+        self.mark_globals();
+        self.mark_frames();
+        self.mark_upvalues();
     }
 
     fn mark_value(self: *GCAllocator, value: *Value) void {
@@ -57,9 +77,112 @@ pub const GCAllocator = struct {
     }
 
     fn mark_object(self: *GCAllocator, obj: *Obj) void {
+        if (obj.is_marked) return;
+
         obj.is_marked = true;
+        common.write_or_die(*Obj, &self.gray_stack, obj);
         if (self.debug_log) {
             std.debug.print("{*} mark {any}\n", .{ obj, obj });
+        }
+    }
+
+    fn mark_globals(self: *GCAllocator) void {
+        var it = self.vm.?.globals.iterator();
+        while (it.next()) |entry| {
+            self.mark_object(entry.key_ptr.*.header.?);
+            self.mark_value(entry.value_ptr);
+        }
+    }
+
+    fn mark_frames(self: *GCAllocator) void {
+        for (self.vm.?.frames) |frame, index| {
+            if (index == self.vm.?.frame_count) break;
+
+            self.mark_object(frame.closure.header.?);
+        }
+    }
+
+    fn mark_upvalues(self: *GCAllocator) void {
+        var upvalue = self.vm.?.open_upvalues;
+        while (upvalue) |uv| {
+            self.mark_object(uv.header.?);
+            upvalue = uv.next;
+        }
+    }
+
+    fn mark_array(self: *GCAllocator, array: *ValueArray) void {
+        for (array.values.items) |*item| {
+            self.mark_value(item);
+        }
+    }
+
+    fn trace_references(self: *GCAllocator) void {
+        while (self.gray_stack.items.len > 0) {
+            var obj = self.gray_stack.pop();
+            self.blacken_object(obj);
+        }
+    }
+
+    fn blacken_object(self: *GCAllocator, obj: *Obj) void {
+        if (self.debug_log) {
+            std.debug.print("{*} blacken {any}\n", .{ obj, obj });
+        }
+
+        switch (obj.t) {
+            .upvalue => {
+                self.mark_value(&obj.as_upvalue().closed);
+            },
+            .function => {
+                var function = obj.as_function();
+                if (function.name) |name| {
+                    self.mark_object(name.header.?);
+                }
+                self.mark_array(&function.chunk.constants);
+            },
+            .closure => {
+                var closure = obj.as_closure();
+                self.mark_object(closure.header.?);
+                self.mark_object(closure.function.header.?);
+                for (closure.upvalues) |upvalue| {
+                    if (upvalue) |uv| {
+                        self.mark_object(uv.header.?);
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn remove_weak_refs(self: *GCAllocator) void {
+        var strings = self.vm.?.strings;
+        var iter = strings.keyIterator();
+        while (iter.next()) |key| {
+            if (!key.*.header.?.is_marked) {
+                _ = strings.remove(key.*);
+            }
+        }
+    }
+
+    fn sweep(self: *GCAllocator) void {
+        var previous: ?*Obj = null;
+        var current = self.vm.?.objects;
+        while (current) |object| {
+            if (object.is_marked) {
+                object.is_marked = false;
+                previous = object;
+                current = object.next;
+            } else {
+                var unreached = object;
+                current = object.next;
+                if (previous) |prev| {
+                    prev.next = current;
+                } else {
+                    self.vm.?.objects = current;
+                }
+
+                unreached.deinit(self.backing_allocator);
+                self.backing_allocator.destroy(unreached);
+            }
         }
     }
 

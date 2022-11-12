@@ -23,6 +23,7 @@ pub const Lox = struct {
 
     pub fn deinit(self: *Lox) void {
         if (self.vm) |*vm| vm.deinit();
+        self.gc.deinit();
     }
 
     pub fn interpret(self: *Lox, source: []const u8) InterpretError!void {
