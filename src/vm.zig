@@ -103,12 +103,8 @@ pub const VM = struct {
 
     options: Options,
 
-    pub fn init(options: Options, allocator: std.mem.Allocator) VM {
-        const gc_allocator = GCAllocator.init(
-            allocator,
-            options.debug_stress_gc,
-            options.debug_gc,
-        ).allocator();
+    pub fn init(options: Options, gc: *GCAllocator) VM {
+        const gc_allocator = gc.allocator();
         const strings = ObjStringHashMap.init(gc_allocator);
         const globals = VariableHashMap.init(gc_allocator);
         var vm = VM{

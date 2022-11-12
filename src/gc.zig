@@ -1,8 +1,15 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const VM = @import("vm.zig").VM;
+
+const Value = @import("value.zig").Value;
+
+const Obj = @import("object.zig").Obj;
+
 pub const GCAllocator = struct {
     backing_allocator: Allocator,
+    vm: ?*VM = null,
 
     debug_stress: bool,
     debug_log: bool,
@@ -24,9 +31,13 @@ pub const GCAllocator = struct {
     }
 
     fn collect_garbage(self: *GCAllocator) void {
+        if (self.vm == null) return;
+
         if (self.debug_log) {
             std.debug.print("-- gc begin \n", .{});
         }
+
+        self.mark_roots();
 
         if (self.debug_log) {
             std.debug.print("-- gc end \n", .{});
@@ -34,8 +45,22 @@ pub const GCAllocator = struct {
     }
 
     fn mark_roots(self: *GCAllocator) void {
-        _ = self;
-        // todo
+        for (self.vm.?.stack) |*slot, index| {
+            if (index < self.vm.?.stack_top) {
+                self.mark_value(slot);
+            }
+        }
+    }
+
+    fn mark_value(self: *GCAllocator, value: *Value) void {
+        if (value.is_obj()) self.mark_object(value.as_obj());
+    }
+
+    fn mark_object(self: *GCAllocator, obj: *Obj) void {
+        obj.is_marked = true;
+        if (self.debug_log) {
+            std.debug.print("{*} mark {any}\n", .{ obj, obj });
+        }
     }
 
     fn alloc(

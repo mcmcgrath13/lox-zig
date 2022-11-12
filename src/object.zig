@@ -67,6 +67,7 @@ fn free_objstr(objstr: *ObjString, allocator: std.mem.Allocator) void {
 
 pub const Obj = struct {
     t: ObjType,
+    is_marked: bool = false,
     next: ?*Obj = null,
 
     pub fn init(t: ObjType) Obj {
@@ -142,7 +143,7 @@ pub const Obj = struct {
     }
 };
 
-pub fn alloc_obj(
+fn alloc_obj(
     objt: ObjType,
     objects: *?*Obj,
     allocator: std.mem.Allocator,
@@ -150,11 +151,27 @@ pub fn alloc_obj(
     var obj = common.create_or_die(allocator, Obj);
     obj.* = Obj.init(objt);
     obj.update_next(objects);
+
+    // set the header on objt payload
+    const tag_obj = std.meta.activeTag(objt);
+    const info = @typeInfo(ObjType).Union;
+    const UnionTag = info.tag_type.?;
+
+    inline for (info.fields) |field_info| {
+        if (@field(UnionTag, field_info.name) == tag_obj) {
+            const field = @field(objt, field_info.name);
+            field.header = obj;
+            break;
+        }
+    }
+
     return obj;
 }
 
 // ======== OBJ STRING ==========
 pub const ObjString = struct {
+    header: ?*Obj = null,
+
     data: []const u8,
     refs: usize = 1,
 
@@ -254,6 +271,8 @@ pub fn take_string(
 
 // ========= OBJ FUNCTION =======
 pub const ObjFunction = struct {
+    header: ?*Obj = null,
+
     arity: u8 = 0,
     upvalue_count: u8 = 0,
     chunk: Chunk,
@@ -300,6 +319,8 @@ pub fn new_function(
 // =========== OBJ CLOSURE ============
 
 pub const ObjClosure = struct {
+    header: ?*Obj = null,
+
     function: *ObjFunction,
     upvalues: []?*ObjUpValue,
 
@@ -347,6 +368,8 @@ pub fn new_closure(
 
 // ============ OBJ UPVALUE ============
 pub const ObjUpValue = struct {
+    header: ?*Obj = null,
+
     location: *Value,
     closed: Value = Value.nil(),
     next: ?*ObjUpValue = null,
@@ -383,6 +406,8 @@ pub fn new_upvalue(
 pub const NativeFn = fn (arg_count: u8, args: [*]Value) Value;
 
 pub const ObjNative = struct {
+    header: ?*Obj = null,
+
     function: NativeFn,
 
     pub fn init(function: NativeFn) ObjNative {
