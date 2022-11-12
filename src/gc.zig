@@ -177,6 +177,7 @@ pub const GCAllocator = struct {
     }
 
     fn sweep(self: *GCAllocator) void {
+        const gc_allocator = self.allocator();
         var previous: ?*Obj = null;
         var current = self.vm.?.objects;
         while (current) |object| {
@@ -193,18 +194,10 @@ pub const GCAllocator = struct {
                     self.vm.?.objects = current;
                 }
 
-                unreached.deinit(self.backing_allocator);
-                self.destroy_obj(unreached);
+                unreached.deinit(gc_allocator);
+                gc_allocator.destroy(unreached);
             }
         }
-    }
-
-    // equivalent to allocator.destroy in vm-land, but needed to route destroy
-    // through the GC Allocator's free instead of only the backing allocator's
-    fn destroy_obj(self: *GCAllocator, obj: *Obj) void {
-        const info = @typeInfo(*Obj).Pointer;
-        const non_const_ptr = @intToPtr([*]u8, @ptrToInt(obj));
-        self.free(non_const_ptr[0..@sizeOf(Obj)], info.alignment, @returnAddress());
     }
 
     fn alloc(
