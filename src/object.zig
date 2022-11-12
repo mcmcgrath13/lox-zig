@@ -42,14 +42,14 @@ pub const ObjType = union(enum) {
                 allocator.destroy(self.string);
             },
             .function => {
-                self.function.deinit(allocator);
+                self.function.deinit();
                 allocator.destroy(self.function);
             },
             .native => {
                 allocator.destroy(self.native);
             },
             .closure => {
-                self.closure.deinit(allocator);
+                self.closure.deinit();
                 allocator.destroy(self.closure);
             },
             .upvalue => {
@@ -268,7 +268,7 @@ pub const ObjFunction = struct {
         return .{ .chunk = chunk };
     }
 
-    pub fn deinit(self: *ObjFunction, _: std.mem.Allocator) void {
+    pub fn deinit(self: *ObjFunction) void {
         self.chunk.deinit();
     }
 
@@ -307,6 +307,8 @@ pub const ObjClosure = struct {
     function: *ObjFunction,
     upvalues: []?*ObjUpValue,
 
+    allocator: std.mem.Allocator,
+
     pub fn init(
         function: *ObjFunction,
         allocator: std.mem.Allocator,
@@ -318,11 +320,15 @@ pub const ObjClosure = struct {
         );
         std.mem.set(?*ObjUpValue, upvalues, null);
 
-        return ObjClosure{ .function = function, .upvalues = upvalues };
+        return ObjClosure{
+            .function = function,
+            .upvalues = upvalues,
+            .allocator = allocator,
+        };
     }
 
-    pub fn deinit(self: *ObjClosure, allocator: std.mem.Allocator) void {
-        allocator.free(self.upvalues);
+    pub fn deinit(self: *ObjClosure) void {
+        self.allocator.free(self.upvalues);
     }
 
     pub fn format(

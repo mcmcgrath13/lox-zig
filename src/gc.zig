@@ -194,9 +194,17 @@ pub const GCAllocator = struct {
                 }
 
                 unreached.deinit(self.backing_allocator);
-                self.backing_allocator.destroy(unreached);
+                self.destroy_obj(unreached);
             }
         }
+    }
+
+    // equivalent to allocator.destroy in vm-land, but needed to route destroy
+    // through the GC Allocator's free instead of only the backing allocator's
+    fn destroy_obj(self: *GCAllocator, obj: *Obj) void {
+        const info = @typeInfo(*Obj).Pointer;
+        const non_const_ptr = @intToPtr([*]u8, @ptrToInt(obj));
+        self.free(non_const_ptr[0..@sizeOf(Obj)], info.alignment, @returnAddress());
     }
 
     fn alloc(
