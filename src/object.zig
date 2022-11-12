@@ -37,9 +37,11 @@ pub const ObjType = union(enum) {
 
     pub fn deinit(self: *ObjType, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .string => free_objstr(self.string, allocator),
+            .string => {
+                self.string.deinit();
+                allocator.destroy(self.string);
+            },
             .function => {
-                if (self.function.name) |name| free_objstr(name, allocator);
                 self.function.deinit(allocator);
                 allocator.destroy(self.function);
             },
@@ -56,14 +58,6 @@ pub const ObjType = union(enum) {
         }
     }
 };
-
-fn free_objstr(objstr: *ObjString, allocator: std.mem.Allocator) void {
-    objstr.refs -= 1;
-    if (objstr.refs == 0) {
-        objstr.deinit(allocator);
-        allocator.destroy(objstr);
-    }
-}
 
 pub const Obj = struct {
     t: ObjType,
@@ -173,20 +167,23 @@ pub const ObjString = struct {
     header: ?*Obj = null,
 
     data: []const u8,
-    refs: usize = 1,
 
-    pub fn init(string: []const u8, allocator: std.mem.Allocator) ObjString {
-        const data = common.alloc_or_die(allocator, u8, string.len);
-        std.mem.copy(u8, data, string);
-        return ObjString{ .data = data };
+    allocator: std.mem.Allocator,
+
+    pub fn init(string: []const u8, allocator: std.mem.Allocator, take: bool) ObjString {
+        const data = if (!take) ifb: {
+            const data = common.alloc_or_die(allocator, u8, string.len);
+            std.mem.copy(u8, data, string);
+            break :ifb data;
+        } else elseb: {
+            break :elseb string;
+        };
+
+        return ObjString{ .data = data, .allocator = allocator };
     }
 
-    pub fn take(data: []const u8) ObjString {
-        return ObjString{ .data = data };
-    }
-
-    pub fn deinit(self: *ObjString, allocator: std.mem.Allocator) void {
-        allocator.free(self.data);
+    pub fn deinit(self: *ObjString) void {
+        self.allocator.free(self.data);
     }
 
     pub fn format(
@@ -219,14 +216,14 @@ pub const ObjStringContext = struct {
 fn get_or_put_interned_string(
     strings: *ObjStringHashMap,
     new_objstr: *ObjString,
+    objects: *?*Obj,
     allocator: std.mem.Allocator,
-) *ObjString {
+) *Obj {
     // new_objstr is a placeholder for the results of the if
     var objstr: *ObjString = new_objstr;
     if (strings.getKey(new_objstr)) |interned_objstr| {
         objstr = interned_objstr;
-        objstr.refs += 1;
-        new_objstr.deinit(allocator);
+        new_objstr.deinit();
     } else {
         objstr = common.create_or_die(allocator, ObjString);
         objstr.* = new_objstr.*;
@@ -236,7 +233,12 @@ fn get_or_put_interned_string(
         };
     }
 
-    return objstr;
+    if (objstr.header) |obj| {
+        return obj;
+    } else {
+        var objt = ObjType.string(objstr);
+        return alloc_obj(objt, objects, allocator);
+    }
 }
 
 pub fn new_string(
@@ -246,27 +248,8 @@ pub fn new_string(
     allocator: std.mem.Allocator,
     take: bool,
 ) *Obj {
-    var objstr = if (take) take_string(strings, string, allocator) else alloc_string(strings, string, allocator);
-    var objt = ObjType.string(objstr);
-    return alloc_obj(objt, objects, allocator);
-}
-
-fn alloc_string(
-    strings: *ObjStringHashMap,
-    string: []const u8,
-    allocator: std.mem.Allocator,
-) *ObjString {
-    var new_objstr = ObjString.init(string, allocator);
-    return get_or_put_interned_string(strings, &new_objstr, allocator);
-}
-
-fn take_string(
-    strings: *ObjStringHashMap,
-    data: []const u8,
-    allocator: std.mem.Allocator,
-) *ObjString {
-    var new_objstr = ObjString.take(data);
-    return get_or_put_interned_string(strings, &new_objstr, allocator);
+    var new_objstr = ObjString.init(string, allocator, take);
+    return get_or_put_interned_string(strings, &new_objstr, objects, allocator);
 }
 
 // ========= OBJ FUNCTION =======

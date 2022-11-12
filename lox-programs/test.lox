@@ -3,6 +3,7 @@ print "st" + "st" + "ri" + "ng";
 var beverage = "cafe au lait";
 var breakfast = "beignets with " + beverage;
 print breakfast;
+print "hello, world";
 
 {
   var a = "outer";

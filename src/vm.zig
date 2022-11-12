@@ -385,7 +385,7 @@ pub const VM = struct {
 
     fn concatenate(self: *VM) InterpretError!void {
         const b: []const u8 = self.peek(0).as_obj().as_string().data;
-        const a: []const u8 = self.peek(0).as_obj().as_string().data;
+        const a: []const u8 = self.peek(1).as_obj().as_string().data;
         const data = std.mem.concat(self.allocator, u8, &[_][]const u8{ a, b }) catch {
             self.runtime_error("out of memory\n", .{});
             return InterpretError.runtime;

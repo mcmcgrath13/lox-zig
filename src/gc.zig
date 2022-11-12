@@ -12,6 +12,8 @@ const Obj = @import("object.zig").Obj;
 
 const common = @import("common.zig");
 
+const GC_HEAP_GROW_FACTOR = 2;
+
 pub const GCAllocator = struct {
     backing_allocator: Allocator,
     vm: ?*VM = null,
@@ -20,6 +22,9 @@ pub const GCAllocator = struct {
     debug_log: bool,
 
     gray_stack: ArrayList(*Obj),
+
+    bytes_allocated: usize = 0,
+    next_gc: usize = 124,
 
     pub fn init(
         backing_allocator: Allocator,
@@ -48,14 +53,18 @@ pub const GCAllocator = struct {
         if (self.debug_log) {
             std.debug.print("-- gc begin \n", .{});
         }
+        const before = self.bytes_allocated;
 
         self.mark_roots();
         self.trace_references();
         self.remove_weak_refs();
         self.sweep();
 
+        self.next_gc = self.bytes_allocated * GC_HEAP_GROW_FACTOR;
+
         if (self.debug_log) {
             std.debug.print("-- gc end \n", .{});
+            std.debug.print("collected {d} bytes (from {d} to {d}) - next garbage collection at {d}\n", .{ before - self.bytes_allocated, before, self.bytes_allocated, self.next_gc });
         }
     }
 
@@ -157,7 +166,11 @@ pub const GCAllocator = struct {
         var strings = self.vm.?.strings;
         var iter = strings.keyIterator();
         while (iter.next()) |key| {
-            if (!key.*.header.?.is_marked) {
+            // it's possible an ObjString has been interned, but its header not allocated yet
+            if (key.*.header != null and !key.*.header.?.is_marked) {
+                if (self.debug_log) {
+                    std.debug.print("removing interned string {s}\n", .{key.*});
+                }
                 _ = strings.remove(key.*);
             }
         }
@@ -194,7 +207,9 @@ pub const GCAllocator = struct {
         ret_addr: usize,
     ) Allocator.Error![]u8 {
         if (self.debug_stress) self.collect_garbage();
+        if (self.bytes_allocated > self.next_gc) self.collect_garbage();
         const res = try self.backing_allocator.rawAlloc(len, ptr_align, len_align, ret_addr);
+        self.bytes_allocated += len;
         if (self.debug_log) {
             std.debug.print("{*} allocate {d}\n", .{ res, len });
         }
@@ -210,7 +225,9 @@ pub const GCAllocator = struct {
         ret_addr: usize,
     ) ?usize {
         if (self.debug_stress and new_size > old_mem.len) self.collect_garbage();
+        if (self.bytes_allocated > self.next_gc) self.collect_garbage();
         const res = self.backing_allocator.rawResize(old_mem, old_align, new_size, len_align, ret_addr);
+        self.bytes_allocated += new_size - old_mem.len;
         if (self.debug_log and res != null) {
             std.debug.print("{*} resized from {d} to {d}\n", .{
                 old_mem,
@@ -228,6 +245,7 @@ pub const GCAllocator = struct {
         ret_addr: usize,
     ) void {
         self.backing_allocator.rawFree(old_mem, old_align, ret_addr);
+        self.bytes_allocated -= old_mem.len;
         if (self.debug_log) {
             std.debug.print("{*} freed {d}\n", .{ old_mem, old_mem.len });
         }
