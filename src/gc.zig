@@ -165,6 +165,7 @@ pub const GCAllocator = struct {
             .class => {
                 var class = obj.as_class();
                 self.mark_object(class.name.header.?);
+                self.mark_table(&class.methods);
             },
             .instance => {
                 var instance = obj.as_instance();

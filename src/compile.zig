@@ -620,14 +620,30 @@ pub const Compiler = struct {
 
     fn class_delcaration(self: *Compiler) void {
         self.parser.consume(TokenType.identifier, "expect class name");
-        const name = self.identifier_constant(self.parser.previous);
+        const name = self.parser.previous;
+        const name_index = self.identifier_constant(name);
         self.declare_variable();
 
-        self.emit_compound(OpCode.class, name);
-        self.define_variable(name);
+        self.emit_compound(OpCode.class, name_index);
+        self.define_variable(name_index);
+
+        self.named_variable(name, false);
 
         self.parser.consume(TokenType.left_brace, "expect '{' before class body");
+        while (!self.parser.check(TokenType.right_brace) and !self.parser.check(TokenType.eof)) {
+            self.method();
+        }
         self.parser.consume(TokenType.right_brace, "expect '}' after class bod");
+        self.emit_opcode(OpCode.pop);
+    }
+
+    fn method(self: *Compiler) void {
+        self.parser.consume(TokenType.identifier, "expect method name");
+        const name_index = self.identifier_constant(self.parser.previous);
+
+        self.fun(FunctionType.function);
+
+        self.emit_compound(OpCode.method, name_index);
     }
 
     fn var_declaration(self: *Compiler) void {

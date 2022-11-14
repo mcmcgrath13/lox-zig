@@ -68,6 +68,7 @@ pub const ObjType = union(enum) {
                 allocator.destroy(self.upvalue);
             },
             .class => {
+                self.class.deinit();
                 allocator.destroy(self.class);
             },
             .instance => {
@@ -469,9 +470,14 @@ pub const ObjClass = struct {
     header: ?*Obj = null,
 
     name: *ObjString,
+    methods: VariableHashMap,
 
-    pub fn init(name: *ObjString) ObjClass {
-        return ObjClass{ .name = name };
+    pub fn init(name: *ObjString, allocator: std.mem.Allocator) ObjClass {
+        return ObjClass{ .name = name, .methods = VariableHashMap.init(allocator) };
+    }
+
+    pub fn deinit(self: *ObjClass) void {
+        self.methods.deinit();
     }
 
     pub fn format(
@@ -493,7 +499,7 @@ pub fn new_class(
     allocator: std.mem.Allocator,
 ) *Obj {
     var objclass = common.create_or_die(allocator, ObjClass);
-    objclass.* = ObjClass.init(name);
+    objclass.* = ObjClass.init(name, allocator);
     var objt = ObjType.class(objclass);
     return alloc_obj(objt, objects, allocator);
 }

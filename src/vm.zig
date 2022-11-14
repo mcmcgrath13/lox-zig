@@ -364,6 +364,15 @@ pub const VM = struct {
                     var name = frame.read_constant().as_obj().as_string();
                     self.push(Value.obj(new_class(name, &self.objects, self.allocator)));
                 },
+                .method => {
+                    const name = frame.read_constant().as_obj().as_string();
+                    const method = self.peek(0);
+                    var class = self.peek(1).as_obj().as_class();
+                    class.methods.put(name, method) catch {
+                        self.runtime_error("out of memory\n", .{});
+                    };
+                    _ = self.pop();
+                },
 
                 // literals
                 .nil => self.push(Value.nil()),
