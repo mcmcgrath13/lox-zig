@@ -104,6 +104,10 @@ pub const Value = union(enum) {
         return self.is_obj_type("instance");
     }
 
+    pub fn is_bound_method(self: Value) bool {
+        return self.is_obj_type("bound_method");
+    }
+
     pub fn is_falsey(self: Value) bool {
         return self.is_nil() or (self.is_boolean() and !self.as_boolean());
     }

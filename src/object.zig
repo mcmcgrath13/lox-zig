@@ -18,6 +18,7 @@ pub const ObjType = union(enum) {
     upvalue: *ObjUpValue,
     class: *ObjClass,
     instance: *ObjInstance,
+    bound_method: *ObjBoundMethod,
 
     pub fn string(obj: *ObjString) ObjType {
         return ObjType{ .string = obj };
@@ -47,6 +48,10 @@ pub const ObjType = union(enum) {
         return ObjType{ .instance = obj };
     }
 
+    pub fn bound_method(obj: *ObjBoundMethod) ObjType {
+        return ObjType{ .bound_method = obj };
+    }
+
     pub fn deinit(self: *ObjType, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .string => {
@@ -74,6 +79,9 @@ pub const ObjType = union(enum) {
             .instance => {
                 self.instance.deinit();
                 allocator.destroy(self.instance);
+            },
+            .bound_method => {
+                allocator.destroy(self.bound_method);
             },
         }
     }
@@ -152,6 +160,13 @@ pub const Obj = struct {
         }
     }
 
+    pub fn as_bound_method(self: *Obj) *ObjBoundMethod {
+        switch (self.t) {
+            .bound_method => return self.t.bound_method,
+            else => unreachable,
+        }
+    }
+
     pub fn format(
         self: Obj,
         comptime fmt: []const u8,
@@ -169,6 +184,7 @@ pub const Obj = struct {
             .upvalue => try writer.print("{}", .{self.t.upvalue}),
             .class => try writer.print("{}", .{self.t.class}),
             .instance => try writer.print("{}", .{self.t.instance}),
+            .bound_method => try writer.print("{}", .{self.t.bound_method}),
         }
     }
 };
@@ -544,5 +560,45 @@ pub fn new_instance(
     var objinstance = common.create_or_die(allocator, ObjInstance);
     objinstance.* = ObjInstance.init(class, allocator);
     var objt = ObjType.instance(objinstance);
+    return alloc_obj(objt, objects, allocator);
+}
+
+// ============ OBJ BOUND METHOD ============
+
+pub const ObjBoundMethod = struct {
+    header: ?*Obj = null,
+
+    receiver: Value,
+    method: *ObjClosure,
+
+    pub fn init(receiver: Value, method: *ObjClosure) ObjBoundMethod {
+        return ObjBoundMethod{
+            .receiver = receiver,
+            .method = method,
+        };
+    }
+
+    pub fn format(
+        self: ObjBoundMethod,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        try writer.print("{s}", .{self.method});
+    }
+};
+
+pub fn new_bound_method(
+    receiver: Value,
+    method: *ObjClosure,
+    objects: *?*Obj,
+    allocator: std.mem.Allocator,
+) *Obj {
+    var objbound_method = common.create_or_die(allocator, ObjBoundMethod);
+    objbound_method.* = ObjBoundMethod.init(receiver, method);
+    var objt = ObjType.bound_method(objbound_method);
     return alloc_obj(objt, objects, allocator);
 }

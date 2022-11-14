@@ -25,8 +25,10 @@ const ObjClosure = obj.ObjClosure;
 const new_closure = obj.new_closure;
 const ObjUpValue = obj.ObjUpValue;
 const new_upvalue = obj.new_upvalue;
+const ObjClass = obj.ObjClass;
 const new_class = obj.new_class;
 const new_instance = obj.new_instance;
+const new_bound_method = obj.new_bound_method;
 
 const common = @import("common.zig");
 
@@ -274,8 +276,7 @@ pub const VM = struct {
                         _ = self.pop();
                         self.push(value);
                     } else {
-                        self.runtime_error("undefined property '{s}'\n", .{name.data});
-                        return InterpretError.runtime;
+                        try self.bind_method(instance.class, name);
                     }
                 },
                 .set_property => {
@@ -480,11 +481,32 @@ pub const VM = struct {
                     self.stack[self.stack_top - arg_count - 1] = Value.obj(new_instance(class, &self.objects, self.allocator));
                     return;
                 },
+                .bound_method => {
+                    var bound = obj_val.as_bound_method();
+                    return self.call(bound.method, arg_count);
+                },
                 else => {},
             }
         }
         self.runtime_error("can only call functions and classes\n", .{});
         return InterpretError.runtime;
+    }
+
+    fn bind_method(self: *VM, class: *ObjClass, name: *ObjString) !void {
+        if (class.methods.get(name)) |method| {
+            var bound_method = new_bound_method(
+                self.peek(0),
+                method.as_obj().as_closure(),
+                &self.objects,
+                self.allocator,
+            );
+
+            _ = self.pop();
+            self.push(Value.obj(bound_method));
+        } else {
+            self.runtime_error("undefined property: '{s}'", .{name});
+            return InterpretError.runtime;
+        }
     }
 
     fn capture_upvalue(self: *VM, value: *Value) *ObjUpValue {

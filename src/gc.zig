@@ -172,6 +172,11 @@ pub const GCAllocator = struct {
                 self.mark_object(instance.class.header.?);
                 self.mark_table(&instance.fields);
             },
+            .bound_method => {
+                var bound_method = obj.as_bound_method();
+                self.mark_value(&bound_method.receiver);
+                self.mark_object(bound_method.method.header.?);
+            },
             else => {},
         }
     }
