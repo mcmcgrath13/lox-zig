@@ -483,6 +483,7 @@ pub const VM = struct {
                 },
                 .bound_method => {
                     var bound = obj_val.as_bound_method();
+                    self.stack[self.stack_top - arg_count - 1] = bound.receiver;
                     return self.call(bound.method, arg_count);
                 },
                 else => {},

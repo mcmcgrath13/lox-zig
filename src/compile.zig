@@ -91,7 +91,7 @@ const RULES = [_]ParseRule{
     .{ .prefix = null, .infix = null, .precedence = .none }, // print,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_return,
     .{ .prefix = null, .infix = null, .precedence = .none }, // super,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // this,
+    .{ .prefix = Compiler.this, .infix = null, .precedence = .none }, // this,
     .{ .prefix = Compiler.literal, .infix = null, .precedence = .none }, // logical_true,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_var,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_while,
@@ -140,7 +140,12 @@ const UpValue = struct {
 
 const FunctionType = enum {
     function,
+    method,
     script,
+};
+
+const ClassCompiler = struct {
+    enclosing: ?*ClassCompiler,
 };
 
 pub const Compiler = struct {
@@ -163,6 +168,8 @@ pub const Compiler = struct {
     upvalues: [std.math.maxInt(u8)]UpValue = undefined,
 
     enclosing: ?*Compiler = null,
+
+    current_class: ?*ClassCompiler = null,
 
     pub fn init(
         function_type: FunctionType,
@@ -187,10 +194,11 @@ pub const Compiler = struct {
         // reserve the first local slot for compiler use
         compiler.add_local(.{
             .t = TokenType.nil,
-            .start = "",
-            .length = 0,
+            .start = if (function_type == .function) "" else "this",
+            .length = if (function_type == .function) 0 else 4,
             .line = 0,
         });
+        compiler.locals[0].depth = 0;
         compiler.mark_initialized();
 
         if (function_type != FunctionType.script) {
@@ -219,6 +227,7 @@ pub const Compiler = struct {
             self.strings,
         );
         comp.enclosing = self;
+        comp.current_class = self.current_class;
         return comp;
     }
 
@@ -263,7 +272,7 @@ pub const Compiler = struct {
 
     fn declaration(self: *Compiler) void {
         if (self.parser.match(TokenType.class)) {
-            self.class_delcaration();
+            self.class_declaration();
         } else if (self.parser.match(TokenType.fun)) {
             self.fun_declaration();
         } else if (self.parser.match(TokenType.cf_var)) {
@@ -334,6 +343,14 @@ pub const Compiler = struct {
 
     fn variable(self: *Compiler, can_assign: bool) void {
         self.named_variable(self.parser.previous, can_assign);
+    }
+
+    fn this(self: *Compiler, _: bool) void {
+        if (self.current_class == null) {
+            self.parser.error_at_previous("can't use 'this' outside of a class");
+            return;
+        }
+        self.variable(false);
     }
 
     fn named_variable(self: *Compiler, token: Token, can_assign: bool) void {
@@ -618,7 +635,7 @@ pub const Compiler = struct {
         }
     }
 
-    fn class_delcaration(self: *Compiler) void {
+    fn class_declaration(self: *Compiler) void {
         self.parser.consume(TokenType.identifier, "expect class name");
         const name = self.parser.previous;
         const name_index = self.identifier_constant(name);
@@ -626,6 +643,9 @@ pub const Compiler = struct {
 
         self.emit_compound(OpCode.class, name_index);
         self.define_variable(name_index);
+
+        var class_compiler = ClassCompiler{ .enclosing = self.current_class };
+        self.current_class = &class_compiler;
 
         self.named_variable(name, false);
 
@@ -635,13 +655,15 @@ pub const Compiler = struct {
         }
         self.parser.consume(TokenType.right_brace, "expect '}' after class bod");
         self.emit_opcode(OpCode.pop);
+
+        self.current_class = self.current_class.?.enclosing;
     }
 
     fn method(self: *Compiler) void {
         self.parser.consume(TokenType.identifier, "expect method name");
         const name_index = self.identifier_constant(self.parser.previous);
 
-        self.fun(FunctionType.function);
+        self.fun(FunctionType.method);
 
         self.emit_compound(OpCode.method, name_index);
     }
