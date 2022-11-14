@@ -261,6 +261,41 @@ pub const VM = struct {
                     const idx = frame.read_byte();
                     self.stack[frame.slots_start + idx] = self.peek(0);
                 },
+                .get_property => {
+                    if (!self.peek(0).is_instance()) {
+                        self.runtime_error("only class instances have properties\n", .{});
+                        return InterpretError.runtime;
+                    }
+
+                    var instance = self.peek(0).as_obj().as_instance();
+                    var name = frame.read_constant().as_obj().as_string();
+
+                    if (instance.fields.get(name)) |value| {
+                        _ = self.pop();
+                        self.push(value);
+                    } else {
+                        self.runtime_error("undefined property '{s}'\n", .{name.data});
+                        return InterpretError.runtime;
+                    }
+                },
+                .set_property => {
+                    if (!self.peek(1).is_instance()) {
+                        self.runtime_error("only class instances have properties\n", .{});
+                        return InterpretError.runtime;
+                    }
+
+                    var instance = self.peek(1).as_obj().as_instance();
+                    var name = frame.read_constant().as_obj().as_string();
+
+                    instance.fields.put(name, self.peek(0)) catch {
+                        self.runtime_error("out of memory\n", .{});
+                        return InterpretError.runtime;
+                    };
+
+                    var value = self.pop();
+                    _ = self.pop();
+                    self.push(value);
+                },
                 .get_upvalue => {
                     const slot = frame.read_byte();
                     self.push(frame.closure.upvalues[slot].?.location.*);

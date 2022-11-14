@@ -59,7 +59,7 @@ const RULES = [_]ParseRule{
     .{ .prefix = null, .infix = null, .precedence = .none }, // left_brace,
     .{ .prefix = null, .infix = null, .precedence = .none }, // right_brace,
     .{ .prefix = null, .infix = null, .precedence = .none }, // comma,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // dot,
+    .{ .prefix = null, .infix = Compiler.dot, .precedence = .call }, // dot,
     .{ .prefix = Compiler.unary, .infix = Compiler.binary, .precedence = .term }, // minus,
     .{ .prefix = null, .infix = Compiler.binary, .precedence = .term }, // plus,
     .{ .prefix = null, .infix = null, .precedence = .none }, // semicolon,
@@ -412,6 +412,18 @@ pub const Compiler = struct {
     fn call(self: *Compiler, _: bool) void {
         const arg_count = self.argument_list();
         self.emit_compound(OpCode.call, arg_count);
+    }
+
+    fn dot(self: *Compiler, can_assign: bool) void {
+        self.parser.consume(TokenType.identifier, "expect identifier after '.'");
+        const name = self.identifier_constant(self.parser.previous);
+
+        if (can_assign and self.parser.match(TokenType.equal)) {
+            self.expression();
+            self.emit_compound(OpCode.set_property, name);
+        } else {
+            self.emit_compound(OpCode.get_property, name);
+        }
     }
 
     fn logical_and(self: *Compiler, _: bool) void {

@@ -32,6 +32,8 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         .set_global => constant_instruction("SET_GLOBAL", c, offset),
         .get_local => byte_instruction("GET_LOCAL", c, offset),
         .set_local => byte_instruction("SET_LOCAL", c, offset),
+        .get_property => constant_instruction("GET_PROPERTY", c, offset),
+        .set_property => constant_instruction("SET_PROPERTY", c, offset),
         .get_upvalue => byte_instruction("GET_UPVALUE", c, offset),
         .set_upvalue => byte_instruction("SET_UPVALUE", c, offset),
         .close_upvalue => simple_instruction("CLOSE_UPVALUE", offset),
