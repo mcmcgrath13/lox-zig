@@ -21,7 +21,7 @@ pub fn main() anyerror!void {
 
     // TODO: put debug bool behind an args flag
     var options = lox.Options.init_all();
-    // options.debug_stress_gc = false;
+    options.debug_stress_gc = false;
     var vm = lox.Lox.init(options, allocator);
     defer vm.deinit();
 

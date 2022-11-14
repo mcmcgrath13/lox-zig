@@ -25,6 +25,7 @@ const ObjClosure = obj.ObjClosure;
 const new_closure = obj.new_closure;
 const ObjUpValue = obj.ObjUpValue;
 const new_upvalue = obj.new_upvalue;
+const new_class = obj.new_class;
 
 const common = @import("common.zig");
 
@@ -322,6 +323,10 @@ pub const VM = struct {
                             upvalue.* = frame.closure.upvalues[index];
                         }
                     }
+                },
+                .class => {
+                    var name = frame.read_constant().as_obj().as_string();
+                    self.push(Value.obj(new_class(name, &self.objects, self.allocator)));
                 },
 
                 // literals

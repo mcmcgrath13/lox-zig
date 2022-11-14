@@ -24,7 +24,7 @@ pub const GCAllocator = struct {
     gray_stack: ArrayList(*Obj),
 
     bytes_allocated: usize = 0,
-    next_gc: usize = 124,
+    next_gc: usize = 1024,
 
     pub fn init(
         backing_allocator: Allocator,
@@ -150,13 +150,16 @@ pub const GCAllocator = struct {
             },
             .closure => {
                 var closure = obj.as_closure();
-                self.mark_object(closure.header.?);
                 self.mark_object(closure.function.header.?);
                 for (closure.upvalues) |upvalue| {
                     if (upvalue) |uv| {
                         self.mark_object(uv.header.?);
                     }
                 }
+            },
+            .class => {
+                var class = obj.as_class();
+                self.mark_object(class.name.header.?);
             },
             else => {},
         }

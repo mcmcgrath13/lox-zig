@@ -43,6 +43,7 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         .pop => simple_instruction("POP", offset),
         .call => byte_instruction("CALL", c, offset),
         .closure => closure_instruction("CLOSURE", c, offset),
+        .class => constant_instruction("CLASS", c, offset),
 
         // literals
         .nil => simple_instruction("NIL", offset),

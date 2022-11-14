@@ -14,6 +14,7 @@ pub const ObjType = union(enum) {
     native: *ObjNative,
     closure: *ObjClosure,
     upvalue: *ObjUpValue,
+    class: *ObjClass,
 
     pub fn string(obj: *ObjString) ObjType {
         return ObjType{ .string = obj };
@@ -35,6 +36,10 @@ pub const ObjType = union(enum) {
         return ObjType{ .upvalue = obj };
     }
 
+    pub fn class(obj: *ObjClass) ObjType {
+        return ObjType{ .class = obj };
+    }
+
     pub fn deinit(self: *ObjType, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .string => {
@@ -54,6 +59,9 @@ pub const ObjType = union(enum) {
             },
             .upvalue => {
                 allocator.destroy(self.upvalue);
+            },
+            .class => {
+                allocator.destroy(self.class);
             },
         }
     }
@@ -118,6 +126,13 @@ pub const Obj = struct {
         }
     }
 
+    pub fn as_class(self: *Obj) *ObjClass {
+        switch (self.t) {
+            .class => return self.t.class,
+            else => unreachable,
+        }
+    }
+
     pub fn format(
         self: Obj,
         comptime fmt: []const u8,
@@ -133,6 +148,7 @@ pub const Obj = struct {
             .native => try writer.print("{}", .{self.t.native}),
             .closure => try writer.print("{}", .{self.t.closure}),
             .upvalue => try writer.print("{}", .{self.t.upvalue}),
+            .class => try writer.print("{}", .{self.t.class}),
         }
     }
 };
@@ -425,5 +441,40 @@ pub fn new_native(
     var objnative = common.create_or_die(allocator, ObjNative);
     objnative.* = ObjNative.init(function);
     var objt = ObjType.native(objnative);
+    return alloc_obj(objt, objects, allocator);
+}
+
+// ============ OBJ CLASS ============
+
+pub const ObjClass = struct {
+    header: ?*Obj = null,
+
+    name: *ObjString,
+
+    pub fn init(name: *ObjString) ObjClass {
+        return ObjClass{ .name = name };
+    }
+
+    pub fn format(
+        self: ObjClass,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        try writer.print("{s}", .{self.name});
+    }
+};
+
+pub fn new_class(
+    name: *ObjString,
+    objects: *?*Obj,
+    allocator: std.mem.Allocator,
+) *Obj {
+    var objclass = common.create_or_die(allocator, ObjClass);
+    objclass.* = ObjClass.init(name);
+    var objt = ObjType.class(objclass);
     return alloc_obj(objt, objects, allocator);
 }

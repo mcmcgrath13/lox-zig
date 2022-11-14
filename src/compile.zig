@@ -262,7 +262,9 @@ pub const Compiler = struct {
     }
 
     fn declaration(self: *Compiler) void {
-        if (self.parser.match(TokenType.fun)) {
+        if (self.parser.match(TokenType.class)) {
+            self.class_delcaration();
+        } else if (self.parser.match(TokenType.fun)) {
             self.fun_declaration();
         } else if (self.parser.match(TokenType.cf_var)) {
             self.var_declaration();
@@ -602,6 +604,18 @@ pub const Compiler = struct {
             self.emit_byte(if (function_compiler.upvalues[i].is_local) 1 else 0);
             self.emit_byte(function_compiler.upvalues[i].index);
         }
+    }
+
+    fn class_delcaration(self: *Compiler) void {
+        self.parser.consume(TokenType.identifier, "expect class name");
+        const name = self.identifier_constant(self.parser.previous);
+        self.declare_variable();
+
+        self.emit_compound(OpCode.class, name);
+        self.define_variable(name);
+
+        self.parser.consume(TokenType.left_brace, "expect '{' before class body");
+        self.parser.consume(TokenType.right_brace, "expect '}' after class bod");
     }
 
     fn var_declaration(self: *Compiler) void {

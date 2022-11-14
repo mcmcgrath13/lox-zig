@@ -24,6 +24,7 @@ pub const OpCode = enum(u8) {
     pop,
     call,
     closure,
+    class,
 
     // literals
     nil,
