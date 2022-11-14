@@ -26,6 +26,7 @@ const new_closure = obj.new_closure;
 const ObjUpValue = obj.ObjUpValue;
 const new_upvalue = obj.new_upvalue;
 const new_class = obj.new_class;
+const new_instance = obj.new_instance;
 
 const common = @import("common.zig");
 
@@ -428,6 +429,11 @@ pub const VM = struct {
                     );
                     self.stack_top -= arg_count + 1;
                     self.push(result);
+                    return;
+                },
+                .class => {
+                    var class = obj_val.as_class();
+                    self.stack[self.stack_top - arg_count - 1] = Value.obj(new_instance(class, &self.objects, self.allocator));
                     return;
                 },
                 else => {},

@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
 const VM = @import("vm.zig").VM;
+const VariableHashMap = @import("vm.zig").VariableHashMap;
 
 const vlu = @import("value.zig");
 const Value = vlu.Value;
@@ -96,7 +97,11 @@ pub const GCAllocator = struct {
     }
 
     fn mark_globals(self: *GCAllocator) void {
-        var it = self.vm.?.globals.iterator();
+        self.mark_table(&self.vm.?.globals);
+    }
+
+    fn mark_table(self: *GCAllocator, table: *VariableHashMap) void {
+        var it = table.iterator();
         while (it.next()) |entry| {
             self.mark_object(entry.key_ptr.*.header.?);
             self.mark_value(entry.value_ptr);
@@ -160,6 +165,11 @@ pub const GCAllocator = struct {
             .class => {
                 var class = obj.as_class();
                 self.mark_object(class.name.header.?);
+            },
+            .instance => {
+                var instance = obj.as_instance();
+                self.mark_object(instance.class.header.?);
+                self.mark_table(&instance.fields);
             },
             else => {},
         }

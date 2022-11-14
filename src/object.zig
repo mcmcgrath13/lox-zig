@@ -6,7 +6,9 @@ const Chunk = @import("chunk.zig").Chunk;
 
 const Value = @import("value.zig").Value;
 
-const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
+const vm = @import("vm.zig");
+const ObjStringHashMap = vm.ObjStringHashMap;
+const VariableHashMap = vm.VariableHashMap;
 
 pub const ObjType = union(enum) {
     string: *ObjString,
@@ -15,6 +17,7 @@ pub const ObjType = union(enum) {
     closure: *ObjClosure,
     upvalue: *ObjUpValue,
     class: *ObjClass,
+    instance: *ObjInstance,
 
     pub fn string(obj: *ObjString) ObjType {
         return ObjType{ .string = obj };
@@ -40,6 +43,10 @@ pub const ObjType = union(enum) {
         return ObjType{ .class = obj };
     }
 
+    pub fn instance(obj: *ObjInstance) ObjType {
+        return ObjType{ .instance = obj };
+    }
+
     pub fn deinit(self: *ObjType, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .string => {
@@ -62,6 +69,10 @@ pub const ObjType = union(enum) {
             },
             .class => {
                 allocator.destroy(self.class);
+            },
+            .instance => {
+                self.instance.deinit();
+                allocator.destroy(self.instance);
             },
         }
     }
@@ -133,6 +144,13 @@ pub const Obj = struct {
         }
     }
 
+    pub fn as_instance(self: *Obj) *ObjInstance {
+        switch (self.t) {
+            .instance => return self.t.instance,
+            else => unreachable,
+        }
+    }
+
     pub fn format(
         self: Obj,
         comptime fmt: []const u8,
@@ -149,6 +167,7 @@ pub const Obj = struct {
             .closure => try writer.print("{}", .{self.t.closure}),
             .upvalue => try writer.print("{}", .{self.t.upvalue}),
             .class => try writer.print("{}", .{self.t.class}),
+            .instance => try writer.print("{}", .{self.t.instance}),
         }
     }
 };
@@ -476,5 +495,48 @@ pub fn new_class(
     var objclass = common.create_or_die(allocator, ObjClass);
     objclass.* = ObjClass.init(name);
     var objt = ObjType.class(objclass);
+    return alloc_obj(objt, objects, allocator);
+}
+
+// ============ OBJ INSTANCE ============
+
+pub const ObjInstance = struct {
+    header: ?*Obj = null,
+
+    class: *ObjClass,
+    fields: VariableHashMap,
+
+    pub fn init(class: *ObjClass, allocator: std.mem.Allocator) ObjInstance {
+        return ObjInstance{
+            .class = class,
+            .fields = VariableHashMap.init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *ObjInstance) void {
+        self.fields.deinit();
+    }
+
+    pub fn format(
+        self: ObjInstance,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        try writer.print("{s} instance", .{self.class});
+    }
+};
+
+pub fn new_instance(
+    class: *ObjClass,
+    objects: *?*Obj,
+    allocator: std.mem.Allocator,
+) *Obj {
+    var objinstance = common.create_or_die(allocator, ObjInstance);
+    objinstance.* = ObjInstance.init(class, allocator);
+    var objt = ObjType.instance(objinstance);
     return alloc_obj(objt, objects, allocator);
 }
