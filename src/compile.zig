@@ -439,6 +439,10 @@ pub const Compiler = struct {
         if (can_assign and self.parser.match(TokenType.equal)) {
             self.expression();
             self.emit_compound(OpCode.set_property, name);
+        } else if (self.parser.match(TokenType.left_paren)) {
+            const arg_count = self.argument_list();
+            self.emit_compound(OpCode.invoke, name);
+            self.emit_byte(arg_count);
         } else {
             self.emit_compound(OpCode.get_property, name);
         }

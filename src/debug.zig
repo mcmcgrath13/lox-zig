@@ -47,6 +47,7 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         .closure => closure_instruction("CLOSURE", c, offset),
         .class => constant_instruction("CLASS", c, offset),
         .method => constant_instruction("METHOD", c, offset),
+        .invoke => invoke_instruction("INVOKE", c, offset),
 
         // literals
         .nil => simple_instruction("NIL", offset),
@@ -128,5 +129,19 @@ fn jump_instruction(
     const jump_size = read_short(.{ c.code.items[offset + 1], c.code.items[offset + 2] });
     const sign: i32 = if (positive_jump) 1 else -1;
     std.debug.print("{s: <16} {d: >4} -> {d}\n", .{ name, offset, @intCast(i32, offset + 3) + sign * jump_size });
+    return offset + 3;
+}
+
+fn invoke_instruction(
+    name: []const u8,
+    c: *Chunk,
+    offset: usize,
+) usize {
+    const constant_idx: usize = c.code.items[offset + 1];
+    const arg_count: usize = c.code.items[offset + 2];
+    std.debug.print(
+        "{s: <16} ({d} args) {d: >4} '{s}'\n",
+        .{ name, arg_count, constant_idx, c.constants.values.items[constant_idx] },
+    );
     return offset + 3;
 }

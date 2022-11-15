@@ -376,6 +376,12 @@ pub const VM = struct {
                     };
                     _ = self.pop();
                 },
+                .invoke => {
+                    const name = frame.read_constant().as_obj().as_string();
+                    const arg_count = frame.read_byte();
+                    try (self.invoke(name, arg_count));
+                    frame = &self.frames[self.frame_count - 1];
+                },
 
                 // literals
                 .nil => self.push(Value.nil()),
@@ -514,6 +520,34 @@ pub const VM = struct {
             self.push(Value.obj(bound_method));
         } else {
             self.runtime_error("undefined property: '{s}'", .{name});
+            return InterpretError.runtime;
+        }
+    }
+
+    fn invoke(self: *VM, name: *ObjString, arg_count: u8) !void {
+        var receiver = self.peek(arg_count);
+        if (!receiver.is_instance()) {
+            self.runtime_error("only instances have method\n", .{});
+            return InterpretError.runtime;
+        }
+        var instance = receiver.as_obj().as_instance();
+        if (instance.fields.get(name)) |value| {
+            self.stack[self.stack_top - arg_count - 1] = value;
+            return self.call_value(value, arg_count);
+        }
+        try self.invoke_from_class(instance.class, name, arg_count);
+    }
+
+    fn invoke_from_class(
+        self: *VM,
+        class: *ObjClass,
+        name: *ObjString,
+        arg_count: u8,
+    ) !void {
+        if (class.methods.get(name)) |method| {
+            try self.call(method.as_obj().as_closure(), arg_count);
+        } else {
+            self.runtime_error("undefined property {s}\n", .{name});
             return InterpretError.runtime;
         }
     }
