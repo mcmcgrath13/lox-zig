@@ -80,6 +80,9 @@ pub const GCAllocator = struct {
         self.mark_globals();
         self.mark_frames();
         self.mark_upvalues();
+        if (self.vm.?.init_string) |s| {
+            self.mark_object(s.header.?);
+        }
     }
 
     fn mark_value(self: *GCAllocator, value: *Value) void {

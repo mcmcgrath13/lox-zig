@@ -102,6 +102,7 @@ pub const VM = struct {
     objects: ?*Obj = null,
     open_upvalues: ?*ObjUpValue = null,
     strings: ObjStringHashMap,
+    init_string: ?*ObjString = null,
 
     globals: VariableHashMap,
 
@@ -120,6 +121,7 @@ pub const VM = struct {
             .globals = globals,
         };
         vm.define_native("clock", clock_native);
+        vm.init_string = new_string(&vm.strings, "init", &vm.objects, vm.allocator, false).as_string();
         return vm;
     }
 
@@ -479,6 +481,12 @@ pub const VM = struct {
                 .class => {
                     var class = obj_val.as_class();
                     self.stack[self.stack_top - arg_count - 1] = Value.obj(new_instance(class, &self.objects, self.allocator));
+                    if (class.methods.get(self.init_string.?)) |initializer| {
+                        return self.call(initializer.as_obj().as_closure(), arg_count);
+                    } else if (arg_count > 0) {
+                        self.runtime_error("expected 0 arguments, but got {d}\n", .{arg_count});
+                        return InterpretError.runtime;
+                    }
                     return;
                 },
                 .bound_method => {
@@ -574,7 +582,7 @@ pub const VM = struct {
         std.debug.print(format, args);
 
         var i = self.frame_count;
-        while (i >= 0) : (i -= 1) {
+        while (i > 0) : (i -= 1) {
             const frame = self.frames[i - 1];
             const chunk = frame.closure.function.chunk;
             const instruction: usize = @ptrToInt(frame.ip) - @ptrToInt(chunk.code.items.ptr) - 1;

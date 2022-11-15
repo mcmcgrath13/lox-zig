@@ -140,6 +140,7 @@ const UpValue = struct {
 
 const FunctionType = enum {
     function,
+    initializer,
     method,
     script,
 };
@@ -478,6 +479,9 @@ pub const Compiler = struct {
         if (self.parser.match(TokenType.semicolon)) {
             self.emit_return();
         } else {
+            if (self.function_type == .initializer) {
+                self.parser.error_at_previous("can't return a value from an initializer");
+            }
             self.expression();
             self.parser.consume(TokenType.semicolon, "expect ';' after return");
             self.emit_opcode(OpCode._return);
@@ -663,7 +667,8 @@ pub const Compiler = struct {
         self.parser.consume(TokenType.identifier, "expect method name");
         const name_index = self.identifier_constant(self.parser.previous);
 
-        self.fun(FunctionType.method);
+        const fun_type = if (self.parser.previous.length == 4 and std.mem.eql(u8, self.parser.previous.start[0..4], "init")) FunctionType.initializer else FunctionType.method;
+        self.fun(fun_type);
 
         self.emit_compound(OpCode.method, name_index);
     }
@@ -880,7 +885,12 @@ pub const Compiler = struct {
     }
 
     fn emit_return(self: *Compiler) void {
-        self.emit_opcodes(.{ OpCode.nil, OpCode._return });
+        if (self.function_type == FunctionType.initializer) {
+            self.emit_compound(OpCode.get_local, 0);
+        } else {
+            self.emit_opcode(OpCode.nil);
+        }
+        self.emit_opcode(OpCode._return);
     }
 
     // helpers for handling scope
