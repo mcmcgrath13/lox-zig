@@ -59,7 +59,7 @@ const RULES = [_]ParseRule{
     .{ .prefix = null, .infix = null, .precedence = .none }, // left_brace,
     .{ .prefix = null, .infix = null, .precedence = .none }, // right_brace,
     .{ .prefix = null, .infix = null, .precedence = .none }, // comma,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // dot,
+    .{ .prefix = null, .infix = Compiler.dot, .precedence = .call }, // dot,
     .{ .prefix = Compiler.unary, .infix = Compiler.binary, .precedence = .term }, // minus,
     .{ .prefix = null, .infix = Compiler.binary, .precedence = .term }, // plus,
     .{ .prefix = null, .infix = null, .precedence = .none }, // semicolon,
@@ -90,8 +90,8 @@ const RULES = [_]ParseRule{
     .{ .prefix = null, .infix = Compiler.logical_or, .precedence = ._or }, // logical_or,
     .{ .prefix = null, .infix = null, .precedence = .none }, // print,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_return,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // super,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // this,
+    .{ .prefix = Compiler.super, .infix = null, .precedence = .none }, // super,
+    .{ .prefix = Compiler.this, .infix = null, .precedence = .none }, // this,
     .{ .prefix = Compiler.literal, .infix = null, .precedence = .none }, // logical_true,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_var,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_while,
@@ -140,7 +140,14 @@ const UpValue = struct {
 
 const FunctionType = enum {
     function,
+    initializer,
+    method,
     script,
+};
+
+const ClassCompiler = struct {
+    enclosing: ?*ClassCompiler,
+    has_superclass: bool = false,
 };
 
 pub const Compiler = struct {
@@ -164,6 +171,8 @@ pub const Compiler = struct {
 
     enclosing: ?*Compiler = null,
 
+    current_class: ?*ClassCompiler = null,
+
     pub fn init(
         function_type: FunctionType,
         parser: *Parser,
@@ -185,12 +194,12 @@ pub const Compiler = struct {
         };
 
         // reserve the first local slot for compiler use
-        compiler.add_local(.{
-            .t = TokenType.nil,
-            .start = "",
-            .length = 0,
-            .line = 0,
-        });
+        if (function_type != .function) {
+            compiler.add_local(Token.synthetic(TokenType.this, "this"));
+        } else {
+            compiler.add_local(Token.synthetic(TokenType.nil, ""));
+        }
+        compiler.locals[0].depth = 0;
         compiler.mark_initialized();
 
         if (function_type != FunctionType.script) {
@@ -219,6 +228,7 @@ pub const Compiler = struct {
             self.strings,
         );
         comp.enclosing = self;
+        comp.current_class = self.current_class;
         return comp;
     }
 
@@ -262,7 +272,9 @@ pub const Compiler = struct {
     }
 
     fn declaration(self: *Compiler) void {
-        if (self.parser.match(TokenType.fun)) {
+        if (self.parser.match(TokenType.class)) {
+            self.class_declaration();
+        } else if (self.parser.match(TokenType.fun)) {
             self.fun_declaration();
         } else if (self.parser.match(TokenType.cf_var)) {
             self.var_declaration();
@@ -332,6 +344,37 @@ pub const Compiler = struct {
 
     fn variable(self: *Compiler, can_assign: bool) void {
         self.named_variable(self.parser.previous, can_assign);
+    }
+
+    fn this(self: *Compiler, _: bool) void {
+        if (self.current_class == null) {
+            self.parser.error_at_previous("can't use 'this' outside of a class");
+            return;
+        }
+        self.variable(false);
+    }
+
+    fn super(self: *Compiler, _: bool) void {
+        if (self.current_class == null) {
+            self.parser.error_at_previous("can't use 'super' outside of a class");
+        } else if (!self.current_class.?.has_superclass) {
+            self.parser.error_at_previous("can't use 'super' in a class without a superclass");
+        }
+
+        self.parser.consume(TokenType.dot, "expect '.' after 'super'");
+        self.parser.consume(TokenType.identifier, "expect superclass method name");
+        const name_idx = self.identifier_constant(self.parser.previous);
+
+        self.named_variable(Token.synthetic(TokenType.this, "this"), false);
+        if (self.parser.match(TokenType.left_paren)) {
+            const arg_count = self.argument_list();
+            self.named_variable(Token.synthetic(TokenType.super, "super"), false);
+            self.emit_compound(OpCode.super_invoke, name_idx);
+            self.emit_byte(arg_count);
+        } else {
+            self.named_variable(Token.synthetic(TokenType.super, "super"), false);
+            self.emit_compound(OpCode.get_super, name_idx);
+        }
     }
 
     fn named_variable(self: *Compiler, token: Token, can_assign: bool) void {
@@ -412,6 +455,22 @@ pub const Compiler = struct {
         self.emit_compound(OpCode.call, arg_count);
     }
 
+    fn dot(self: *Compiler, can_assign: bool) void {
+        self.parser.consume(TokenType.identifier, "expect identifier after '.'");
+        const name = self.identifier_constant(self.parser.previous);
+
+        if (can_assign and self.parser.match(TokenType.equal)) {
+            self.expression();
+            self.emit_compound(OpCode.set_property, name);
+        } else if (self.parser.match(TokenType.left_paren)) {
+            const arg_count = self.argument_list();
+            self.emit_compound(OpCode.invoke, name);
+            self.emit_byte(arg_count);
+        } else {
+            self.emit_compound(OpCode.get_property, name);
+        }
+    }
+
     fn logical_and(self: *Compiler, _: bool) void {
         const end_jump = self.emit_jump(OpCode.jump_if_false);
         self.emit_opcode(OpCode.pop);
@@ -447,6 +506,9 @@ pub const Compiler = struct {
         if (self.parser.match(TokenType.semicolon)) {
             self.emit_return();
         } else {
+            if (self.function_type == .initializer) {
+                self.parser.error_at_previous("can't return a value from an initializer");
+            }
             self.expression();
             self.parser.consume(TokenType.semicolon, "expect ';' after return");
             self.emit_opcode(OpCode._return);
@@ -602,6 +664,61 @@ pub const Compiler = struct {
             self.emit_byte(if (function_compiler.upvalues[i].is_local) 1 else 0);
             self.emit_byte(function_compiler.upvalues[i].index);
         }
+    }
+
+    fn class_declaration(self: *Compiler) void {
+        self.parser.consume(TokenType.identifier, "expect class name");
+        const name = self.parser.previous;
+        const name_index = self.identifier_constant(name);
+        self.declare_variable();
+
+        self.emit_compound(OpCode.class, name_index);
+        self.define_variable(name_index);
+
+        var class_compiler = ClassCompiler{ .enclosing = self.current_class };
+        self.current_class = &class_compiler;
+
+        if (self.parser.match(TokenType.less)) {
+            self.parser.consume(TokenType.identifier, "expect superclass name");
+            self.variable(false);
+
+            if (name.equals(self.parser.previous)) {
+                self.parser.error_at_previous("class can't inherit from itself");
+            }
+
+            self.begin_scope();
+            self.add_local(Token.synthetic(TokenType.super, "super"));
+            self.define_variable(0);
+
+            self.named_variable(name, false);
+            self.emit_opcode(OpCode.inherit);
+            class_compiler.has_superclass = true;
+        }
+
+        self.named_variable(name, false);
+
+        self.parser.consume(TokenType.left_brace, "expect '{' before class body");
+        while (!self.parser.check(TokenType.right_brace) and !self.parser.check(TokenType.eof)) {
+            self.method();
+        }
+        self.parser.consume(TokenType.right_brace, "expect '}' after class bod");
+        self.emit_opcode(OpCode.pop);
+
+        if (class_compiler.has_superclass) {
+            self.end_scope();
+        }
+
+        self.current_class = self.current_class.?.enclosing;
+    }
+
+    fn method(self: *Compiler) void {
+        self.parser.consume(TokenType.identifier, "expect method name");
+        const name_index = self.identifier_constant(self.parser.previous);
+
+        const fun_type = if (self.parser.previous.length == 4 and std.mem.eql(u8, self.parser.previous.start[0..4], "init")) FunctionType.initializer else FunctionType.method;
+        self.fun(fun_type);
+
+        self.emit_compound(OpCode.method, name_index);
     }
 
     fn var_declaration(self: *Compiler) void {
@@ -816,7 +933,12 @@ pub const Compiler = struct {
     }
 
     fn emit_return(self: *Compiler) void {
-        self.emit_opcodes(.{ OpCode.nil, OpCode._return });
+        if (self.function_type == FunctionType.initializer) {
+            self.emit_compound(OpCode.get_local, 0);
+        } else {
+            self.emit_opcode(OpCode.nil);
+        }
+        self.emit_opcode(OpCode._return);
     }
 
     // helpers for handling scope

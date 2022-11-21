@@ -25,6 +25,10 @@ const ObjClosure = obj.ObjClosure;
 const new_closure = obj.new_closure;
 const ObjUpValue = obj.ObjUpValue;
 const new_upvalue = obj.new_upvalue;
+const ObjClass = obj.ObjClass;
+const new_class = obj.new_class;
+const new_instance = obj.new_instance;
+const new_bound_method = obj.new_bound_method;
 
 const common = @import("common.zig");
 
@@ -83,6 +87,10 @@ const CallFrame = struct {
     fn read_short(self: *CallFrame) u16 {
         return common.read_short(.{ self.read_byte(), self.read_byte() });
     }
+
+    fn read_string(self: *CallFrame) *ObjString {
+        return self.read_constant().as_obj().as_string();
+    }
 };
 
 pub const VM = struct {
@@ -98,6 +106,7 @@ pub const VM = struct {
     objects: ?*Obj = null,
     open_upvalues: ?*ObjUpValue = null,
     strings: ObjStringHashMap,
+    init_string: ?*ObjString = null,
 
     globals: VariableHashMap,
 
@@ -116,6 +125,7 @@ pub const VM = struct {
             .globals = globals,
         };
         vm.define_native("clock", clock_native);
+        vm.init_string = new_string(&vm.strings, "init", &vm.objects, vm.allocator, false).as_string();
         return vm;
     }
 
@@ -226,7 +236,7 @@ pub const VM = struct {
                     self.push(constant);
                 },
                 .define_global => {
-                    var name = frame.read_constant().as_obj().as_string();
+                    var name = frame.read_string();
                     self.globals.put(name, self.peek(0)) catch {
                         std.debug.print("Out of memory!\n", .{});
                         std.process.exit(1);
@@ -234,7 +244,7 @@ pub const VM = struct {
                     _ = self.pop();
                 },
                 .get_global => {
-                    var name = frame.read_constant().as_obj().as_string();
+                    var name = frame.read_string();
                     if (self.globals.get(name)) |value| {
                         self.push(value);
                     } else {
@@ -243,7 +253,7 @@ pub const VM = struct {
                     }
                 },
                 .set_global => {
-                    var name = frame.read_constant().as_obj().as_string();
+                    var name = frame.read_string();
                     if (self.globals.getPtr(name)) |value_ptr| {
                         value_ptr.* = self.peek(0);
                     } else {
@@ -259,6 +269,40 @@ pub const VM = struct {
                     const idx = frame.read_byte();
                     self.stack[frame.slots_start + idx] = self.peek(0);
                 },
+                .get_property => {
+                    if (!self.peek(0).is_instance()) {
+                        self.runtime_error("only class instances have properties\n", .{});
+                        return InterpretError.runtime;
+                    }
+
+                    var instance = self.peek(0).as_obj().as_instance();
+                    var name = frame.read_string();
+
+                    if (instance.fields.get(name)) |value| {
+                        _ = self.pop();
+                        self.push(value);
+                    } else {
+                        try self.bind_method(instance.class, name);
+                    }
+                },
+                .set_property => {
+                    if (!self.peek(1).is_instance()) {
+                        self.runtime_error("only class instances have properties\n", .{});
+                        return InterpretError.runtime;
+                    }
+
+                    var instance = self.peek(1).as_obj().as_instance();
+                    var name = frame.read_string();
+
+                    instance.fields.put(name, self.peek(0)) catch {
+                        self.runtime_error("out of memory\n", .{});
+                        return InterpretError.runtime;
+                    };
+
+                    var value = self.pop();
+                    _ = self.pop();
+                    self.push(value);
+                },
                 .get_upvalue => {
                     const slot = frame.read_byte();
                     self.push(frame.closure.upvalues[slot].?.location.*);
@@ -270,6 +314,11 @@ pub const VM = struct {
                 .close_upvalue => {
                     self.close_upvalues(&self.stack[self.stack_top - 1]);
                     _ = self.pop();
+                },
+                .get_super => {
+                    const method_name = frame.read_string();
+                    const superclass = self.pop().as_obj().as_class();
+                    try self.bind_method(superclass, method_name);
                 },
                 .jump_if_false => {
                     const jump = frame.read_short();
@@ -322,6 +371,42 @@ pub const VM = struct {
                             upvalue.* = frame.closure.upvalues[index];
                         }
                     }
+                },
+                .class => {
+                    var name = frame.read_string();
+                    self.push(Value.obj(new_class(name, &self.objects, self.allocator)));
+                },
+                .method => {
+                    const name = frame.read_string();
+                    const method = self.peek(0);
+                    var class = self.peek(1).as_obj().as_class();
+                    class.methods.put(name, method) catch {
+                        self.runtime_error("out of memory\n", .{});
+                    };
+                    _ = self.pop();
+                },
+                .invoke => {
+                    const name = frame.read_string();
+                    const arg_count = frame.read_byte();
+                    try (self.invoke(name, arg_count));
+                    frame = &self.frames[self.frame_count - 1];
+                },
+                .super_invoke => {
+                    const method_name = frame.read_string();
+                    const arg_count = frame.read_byte();
+                    const superclass = self.pop().as_obj().as_class();
+                    try self.invoke_from_class(superclass, method_name, arg_count);
+                    frame = &self.frames[self.frame_count - 1];
+                },
+                .inherit => {
+                    const superclass = self.peek(1);
+                    if (!superclass.is_class()) {
+                        self.runtime_error("superclass must be a class\n", .{});
+                        return InterpretError.runtime;
+                    }
+                    var subclass = self.peek(0).as_obj().as_class();
+                    subclass.inherit(superclass.as_obj().as_class());
+                    _ = self.pop();
                 },
 
                 // literals
@@ -425,11 +510,72 @@ pub const VM = struct {
                     self.push(result);
                     return;
                 },
+                .class => {
+                    var class = obj_val.as_class();
+                    self.stack[self.stack_top - arg_count - 1] = Value.obj(new_instance(class, &self.objects, self.allocator));
+                    if (class.methods.get(self.init_string.?)) |initializer| {
+                        return self.call(initializer.as_obj().as_closure(), arg_count);
+                    } else if (arg_count > 0) {
+                        self.runtime_error("expected 0 arguments, but got {d}\n", .{arg_count});
+                        return InterpretError.runtime;
+                    }
+                    return;
+                },
+                .bound_method => {
+                    var bound = obj_val.as_bound_method();
+                    self.stack[self.stack_top - arg_count - 1] = bound.receiver;
+                    return self.call(bound.method, arg_count);
+                },
                 else => {},
             }
         }
         self.runtime_error("can only call functions and classes\n", .{});
         return InterpretError.runtime;
+    }
+
+    fn bind_method(self: *VM, class: *ObjClass, name: *ObjString) !void {
+        if (class.methods.get(name)) |method| {
+            var bound_method = new_bound_method(
+                self.peek(0),
+                method.as_obj().as_closure(),
+                &self.objects,
+                self.allocator,
+            );
+
+            _ = self.pop();
+            self.push(Value.obj(bound_method));
+        } else {
+            self.runtime_error("undefined property: '{s}'", .{name});
+            return InterpretError.runtime;
+        }
+    }
+
+    fn invoke(self: *VM, name: *ObjString, arg_count: u8) !void {
+        var receiver = self.peek(arg_count);
+        if (!receiver.is_instance()) {
+            self.runtime_error("only instances have methods\n", .{});
+            return InterpretError.runtime;
+        }
+        var instance = receiver.as_obj().as_instance();
+        if (instance.fields.get(name)) |value| {
+            self.stack[self.stack_top - arg_count - 1] = value;
+            return self.call_value(value, arg_count);
+        }
+        try self.invoke_from_class(instance.class, name, arg_count);
+    }
+
+    fn invoke_from_class(
+        self: *VM,
+        class: *ObjClass,
+        name: *ObjString,
+        arg_count: u8,
+    ) !void {
+        if (class.methods.get(name)) |method| {
+            try self.call(method.as_obj().as_closure(), arg_count);
+        } else {
+            self.runtime_error("undefined property {s}\n", .{name});
+            return InterpretError.runtime;
+        }
     }
 
     fn capture_upvalue(self: *VM, value: *Value) *ObjUpValue {
@@ -455,7 +601,7 @@ pub const VM = struct {
     }
 
     fn close_upvalues(self: *VM, last: *Value) void {
-        while (self.open_upvalues != null and @ptrToInt(self.open_upvalues.?) > @ptrToInt(last)) {
+        while (self.open_upvalues != null and @ptrToInt(self.open_upvalues.?.location) >= @ptrToInt(last)) {
             var upvalue = self.open_upvalues.?;
             upvalue.closed = upvalue.location.*;
             upvalue.location = &upvalue.closed;
@@ -496,7 +642,7 @@ pub const VM = struct {
         std.debug.print(format, args);
 
         var i = self.frame_count;
-        while (i >= 0) : (i -= 1) {
+        while (i > 0) : (i -= 1) {
             const frame = self.frames[i - 1];
             const chunk = frame.closure.function.chunk;
             const instruction: usize = @ptrToInt(frame.ip) - @ptrToInt(chunk.code.items.ptr) - 1;

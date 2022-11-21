@@ -32,9 +32,12 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         .set_global => constant_instruction("SET_GLOBAL", c, offset),
         .get_local => byte_instruction("GET_LOCAL", c, offset),
         .set_local => byte_instruction("SET_LOCAL", c, offset),
+        .get_property => constant_instruction("GET_PROPERTY", c, offset),
+        .set_property => constant_instruction("SET_PROPERTY", c, offset),
         .get_upvalue => byte_instruction("GET_UPVALUE", c, offset),
         .set_upvalue => byte_instruction("SET_UPVALUE", c, offset),
         .close_upvalue => simple_instruction("CLOSE_UPVALUE", offset),
+        .get_super => constant_instruction("GET_SUPER", c, offset),
         .jump_if_false => jump_instruction("JUMP_IF_FALSE", true, c, offset),
         .jump => jump_instruction("JUMP", true, c, offset),
         .loop => jump_instruction("LOOP", false, c, offset),
@@ -43,6 +46,11 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         .pop => simple_instruction("POP", offset),
         .call => byte_instruction("CALL", c, offset),
         .closure => closure_instruction("CLOSURE", c, offset),
+        .class => constant_instruction("CLASS", c, offset),
+        .method => constant_instruction("METHOD", c, offset),
+        .invoke => invoke_instruction("INVOKE", c, offset),
+        .super_invoke => invoke_instruction("SUPER_INVOKE", c, offset),
+        .inherit => simple_instruction("INHERIT", offset),
 
         // literals
         .nil => simple_instruction("NIL", offset),
@@ -124,5 +132,19 @@ fn jump_instruction(
     const jump_size = read_short(.{ c.code.items[offset + 1], c.code.items[offset + 2] });
     const sign: i32 = if (positive_jump) 1 else -1;
     std.debug.print("{s: <16} {d: >4} -> {d}\n", .{ name, offset, @intCast(i32, offset + 3) + sign * jump_size });
+    return offset + 3;
+}
+
+fn invoke_instruction(
+    name: []const u8,
+    c: *Chunk,
+    offset: usize,
+) usize {
+    const constant_idx: usize = c.code.items[offset + 1];
+    const arg_count: usize = c.code.items[offset + 2];
+    std.debug.print(
+        "{s: <16} ({d} args) {d: >4} '{s}'\n",
+        .{ name, arg_count, constant_idx, c.constants.values.items[constant_idx] },
+    );
     return offset + 3;
 }

@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
 const VM = @import("vm.zig").VM;
+const VariableHashMap = @import("vm.zig").VariableHashMap;
 
 const vlu = @import("value.zig");
 const Value = vlu.Value;
@@ -24,7 +25,7 @@ pub const GCAllocator = struct {
     gray_stack: ArrayList(*Obj),
 
     bytes_allocated: usize = 0,
-    next_gc: usize = 124,
+    next_gc: usize = 1024,
 
     pub fn init(
         backing_allocator: Allocator,
@@ -79,6 +80,9 @@ pub const GCAllocator = struct {
         self.mark_globals();
         self.mark_frames();
         self.mark_upvalues();
+        if (self.vm.?.init_string) |s| {
+            self.mark_object(s.header.?);
+        }
     }
 
     fn mark_value(self: *GCAllocator, value: *Value) void {
@@ -96,7 +100,11 @@ pub const GCAllocator = struct {
     }
 
     fn mark_globals(self: *GCAllocator) void {
-        var it = self.vm.?.globals.iterator();
+        self.mark_table(&self.vm.?.globals);
+    }
+
+    fn mark_table(self: *GCAllocator, table: *VariableHashMap) void {
+        var it = table.iterator();
         while (it.next()) |entry| {
             self.mark_object(entry.key_ptr.*.header.?);
             self.mark_value(entry.value_ptr);
@@ -150,13 +158,27 @@ pub const GCAllocator = struct {
             },
             .closure => {
                 var closure = obj.as_closure();
-                self.mark_object(closure.header.?);
                 self.mark_object(closure.function.header.?);
                 for (closure.upvalues) |upvalue| {
                     if (upvalue) |uv| {
                         self.mark_object(uv.header.?);
                     }
                 }
+            },
+            .class => {
+                var class = obj.as_class();
+                self.mark_object(class.name.header.?);
+                self.mark_table(&class.methods);
+            },
+            .instance => {
+                var instance = obj.as_instance();
+                self.mark_object(instance.class.header.?);
+                self.mark_table(&instance.fields);
+            },
+            .bound_method => {
+                var bound_method = obj.as_bound_method();
+                self.mark_value(&bound_method.receiver);
+                self.mark_object(bound_method.method.header.?);
             },
             else => {},
         }

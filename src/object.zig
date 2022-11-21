@@ -6,7 +6,9 @@ const Chunk = @import("chunk.zig").Chunk;
 
 const Value = @import("value.zig").Value;
 
-const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
+const vm = @import("vm.zig");
+const ObjStringHashMap = vm.ObjStringHashMap;
+const VariableHashMap = vm.VariableHashMap;
 
 pub const ObjType = union(enum) {
     string: *ObjString,
@@ -14,6 +16,9 @@ pub const ObjType = union(enum) {
     native: *ObjNative,
     closure: *ObjClosure,
     upvalue: *ObjUpValue,
+    class: *ObjClass,
+    instance: *ObjInstance,
+    bound_method: *ObjBoundMethod,
 
     pub fn string(obj: *ObjString) ObjType {
         return ObjType{ .string = obj };
@@ -35,6 +40,18 @@ pub const ObjType = union(enum) {
         return ObjType{ .upvalue = obj };
     }
 
+    pub fn class(obj: *ObjClass) ObjType {
+        return ObjType{ .class = obj };
+    }
+
+    pub fn instance(obj: *ObjInstance) ObjType {
+        return ObjType{ .instance = obj };
+    }
+
+    pub fn bound_method(obj: *ObjBoundMethod) ObjType {
+        return ObjType{ .bound_method = obj };
+    }
+
     pub fn deinit(self: *ObjType, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .string => {
@@ -54,6 +71,17 @@ pub const ObjType = union(enum) {
             },
             .upvalue => {
                 allocator.destroy(self.upvalue);
+            },
+            .class => {
+                self.class.deinit();
+                allocator.destroy(self.class);
+            },
+            .instance => {
+                self.instance.deinit();
+                allocator.destroy(self.instance);
+            },
+            .bound_method => {
+                allocator.destroy(self.bound_method);
             },
         }
     }
@@ -118,6 +146,27 @@ pub const Obj = struct {
         }
     }
 
+    pub fn as_class(self: *Obj) *ObjClass {
+        switch (self.t) {
+            .class => return self.t.class,
+            else => unreachable,
+        }
+    }
+
+    pub fn as_instance(self: *Obj) *ObjInstance {
+        switch (self.t) {
+            .instance => return self.t.instance,
+            else => unreachable,
+        }
+    }
+
+    pub fn as_bound_method(self: *Obj) *ObjBoundMethod {
+        switch (self.t) {
+            .bound_method => return self.t.bound_method,
+            else => unreachable,
+        }
+    }
+
     pub fn format(
         self: Obj,
         comptime fmt: []const u8,
@@ -133,6 +182,9 @@ pub const Obj = struct {
             .native => try writer.print("{}", .{self.t.native}),
             .closure => try writer.print("{}", .{self.t.closure}),
             .upvalue => try writer.print("{}", .{self.t.upvalue}),
+            .class => try writer.print("{}", .{self.t.class}),
+            .instance => try writer.print("{}", .{self.t.instance}),
+            .bound_method => try writer.print("{}", .{self.t.bound_method}),
         }
     }
 };
@@ -425,5 +477,137 @@ pub fn new_native(
     var objnative = common.create_or_die(allocator, ObjNative);
     objnative.* = ObjNative.init(function);
     var objt = ObjType.native(objnative);
+    return alloc_obj(objt, objects, allocator);
+}
+
+// ============ OBJ CLASS ============
+
+pub const ObjClass = struct {
+    header: ?*Obj = null,
+
+    name: *ObjString,
+    methods: VariableHashMap,
+
+    pub fn init(name: *ObjString, allocator: std.mem.Allocator) ObjClass {
+        return ObjClass{ .name = name, .methods = VariableHashMap.init(allocator) };
+    }
+
+    pub fn deinit(self: *ObjClass) void {
+        self.methods.deinit();
+    }
+
+    pub fn inherit(self: *ObjClass, super: *ObjClass) void {
+        var new_methods = super.methods.clone() catch {
+            std.debug.print("out of memory\n", .{});
+            std.process.exit(1);
+        };
+        self.methods.deinit();
+        self.methods = new_methods;
+    }
+
+    pub fn format(
+        self: ObjClass,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        try writer.print("{s}", .{self.name});
+    }
+};
+
+pub fn new_class(
+    name: *ObjString,
+    objects: *?*Obj,
+    allocator: std.mem.Allocator,
+) *Obj {
+    var objclass = common.create_or_die(allocator, ObjClass);
+    objclass.* = ObjClass.init(name, allocator);
+    var objt = ObjType.class(objclass);
+    return alloc_obj(objt, objects, allocator);
+}
+
+// ============ OBJ INSTANCE ============
+
+pub const ObjInstance = struct {
+    header: ?*Obj = null,
+
+    class: *ObjClass,
+    fields: VariableHashMap,
+
+    pub fn init(class: *ObjClass, allocator: std.mem.Allocator) ObjInstance {
+        return ObjInstance{
+            .class = class,
+            .fields = VariableHashMap.init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *ObjInstance) void {
+        self.fields.deinit();
+    }
+
+    pub fn format(
+        self: ObjInstance,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        try writer.print("{s} instance", .{self.class});
+    }
+};
+
+pub fn new_instance(
+    class: *ObjClass,
+    objects: *?*Obj,
+    allocator: std.mem.Allocator,
+) *Obj {
+    var objinstance = common.create_or_die(allocator, ObjInstance);
+    objinstance.* = ObjInstance.init(class, allocator);
+    var objt = ObjType.instance(objinstance);
+    return alloc_obj(objt, objects, allocator);
+}
+
+// ============ OBJ BOUND METHOD ============
+
+pub const ObjBoundMethod = struct {
+    header: ?*Obj = null,
+
+    receiver: Value,
+    method: *ObjClosure,
+
+    pub fn init(receiver: Value, method: *ObjClosure) ObjBoundMethod {
+        return ObjBoundMethod{
+            .receiver = receiver,
+            .method = method,
+        };
+    }
+
+    pub fn format(
+        self: ObjBoundMethod,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        try writer.print("{s}", .{self.method});
+    }
+};
+
+pub fn new_bound_method(
+    receiver: Value,
+    method: *ObjClosure,
+    objects: *?*Obj,
+    allocator: std.mem.Allocator,
+) *Obj {
+    var objbound_method = common.create_or_die(allocator, ObjBoundMethod);
+    objbound_method.* = ObjBoundMethod.init(receiver, method);
+    var objt = ObjType.bound_method(objbound_method);
     return alloc_obj(objt, objects, allocator);
 }

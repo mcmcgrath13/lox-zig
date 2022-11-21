@@ -88,6 +88,26 @@ pub const Value = union(enum) {
         return self.is_obj_type("native");
     }
 
+    pub fn is_closure(self: Value) bool {
+        return self.is_obj_type("closure");
+    }
+
+    pub fn is_upvalue(self: Value) bool {
+        return self.is_obj_type("upvalue");
+    }
+
+    pub fn is_class(self: Value) bool {
+        return self.is_obj_type("class");
+    }
+
+    pub fn is_instance(self: Value) bool {
+        return self.is_obj_type("instance");
+    }
+
+    pub fn is_bound_method(self: Value) bool {
+        return self.is_obj_type("bound_method");
+    }
+
     pub fn is_falsey(self: Value) bool {
         return self.is_nil() or (self.is_boolean() and !self.as_boolean());
     }
