@@ -37,6 +37,7 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         .get_upvalue => byte_instruction("GET_UPVALUE", c, offset),
         .set_upvalue => byte_instruction("SET_UPVALUE", c, offset),
         .close_upvalue => simple_instruction("CLOSE_UPVALUE", offset),
+        .get_super => constant_instruction("GET_SUPER", c, offset),
         .jump_if_false => jump_instruction("JUMP_IF_FALSE", true, c, offset),
         .jump => jump_instruction("JUMP", true, c, offset),
         .loop => jump_instruction("LOOP", false, c, offset),
@@ -48,6 +49,8 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
         .class => constant_instruction("CLASS", c, offset),
         .method => constant_instruction("METHOD", c, offset),
         .invoke => invoke_instruction("INVOKE", c, offset),
+        .super_invoke => invoke_instruction("SUPER_INVOKE", c, offset),
+        .inherit => simple_instruction("INHERIT", offset),
 
         // literals
         .nil => simple_instruction("NIL", offset),

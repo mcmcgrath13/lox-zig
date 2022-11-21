@@ -18,6 +18,7 @@ pub const OpCode = enum(u8) {
     get_upvalue,
     set_upvalue,
     close_upvalue,
+    get_super,
     jump_if_false,
     jump,
     loop,
@@ -29,6 +30,8 @@ pub const OpCode = enum(u8) {
     class,
     method,
     invoke,
+    super_invoke,
+    inherit,
 
     // literals
     nil,

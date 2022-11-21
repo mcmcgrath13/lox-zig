@@ -220,6 +220,15 @@ pub const Token = struct {
             other.start[0..other.length],
         );
     }
+
+    pub fn synthetic(t: TokenType, name: []const u8) Token {
+        return Token{
+            .t = t,
+            .start = name.ptr,
+            .length = name.len,
+            .line = 0,
+        };
+    }
 };
 
 pub const TokenType = enum(u8) {

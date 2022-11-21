@@ -87,6 +87,10 @@ const CallFrame = struct {
     fn read_short(self: *CallFrame) u16 {
         return common.read_short(.{ self.read_byte(), self.read_byte() });
     }
+
+    fn read_string(self: *CallFrame) *ObjString {
+        return self.read_constant().as_obj().as_string();
+    }
 };
 
 pub const VM = struct {
@@ -232,7 +236,7 @@ pub const VM = struct {
                     self.push(constant);
                 },
                 .define_global => {
-                    var name = frame.read_constant().as_obj().as_string();
+                    var name = frame.read_string();
                     self.globals.put(name, self.peek(0)) catch {
                         std.debug.print("Out of memory!\n", .{});
                         std.process.exit(1);
@@ -240,7 +244,7 @@ pub const VM = struct {
                     _ = self.pop();
                 },
                 .get_global => {
-                    var name = frame.read_constant().as_obj().as_string();
+                    var name = frame.read_string();
                     if (self.globals.get(name)) |value| {
                         self.push(value);
                     } else {
@@ -249,7 +253,7 @@ pub const VM = struct {
                     }
                 },
                 .set_global => {
-                    var name = frame.read_constant().as_obj().as_string();
+                    var name = frame.read_string();
                     if (self.globals.getPtr(name)) |value_ptr| {
                         value_ptr.* = self.peek(0);
                     } else {
@@ -272,7 +276,7 @@ pub const VM = struct {
                     }
 
                     var instance = self.peek(0).as_obj().as_instance();
-                    var name = frame.read_constant().as_obj().as_string();
+                    var name = frame.read_string();
 
                     if (instance.fields.get(name)) |value| {
                         _ = self.pop();
@@ -288,7 +292,7 @@ pub const VM = struct {
                     }
 
                     var instance = self.peek(1).as_obj().as_instance();
-                    var name = frame.read_constant().as_obj().as_string();
+                    var name = frame.read_string();
 
                     instance.fields.put(name, self.peek(0)) catch {
                         self.runtime_error("out of memory\n", .{});
@@ -310,6 +314,11 @@ pub const VM = struct {
                 .close_upvalue => {
                     self.close_upvalues(&self.stack[self.stack_top - 1]);
                     _ = self.pop();
+                },
+                .get_super => {
+                    const method_name = frame.read_string();
+                    const superclass = self.pop().as_obj().as_class();
+                    try self.bind_method(superclass, method_name);
                 },
                 .jump_if_false => {
                     const jump = frame.read_short();
@@ -364,11 +373,11 @@ pub const VM = struct {
                     }
                 },
                 .class => {
-                    var name = frame.read_constant().as_obj().as_string();
+                    var name = frame.read_string();
                     self.push(Value.obj(new_class(name, &self.objects, self.allocator)));
                 },
                 .method => {
-                    const name = frame.read_constant().as_obj().as_string();
+                    const name = frame.read_string();
                     const method = self.peek(0);
                     var class = self.peek(1).as_obj().as_class();
                     class.methods.put(name, method) catch {
@@ -377,10 +386,27 @@ pub const VM = struct {
                     _ = self.pop();
                 },
                 .invoke => {
-                    const name = frame.read_constant().as_obj().as_string();
+                    const name = frame.read_string();
                     const arg_count = frame.read_byte();
                     try (self.invoke(name, arg_count));
                     frame = &self.frames[self.frame_count - 1];
+                },
+                .super_invoke => {
+                    const method_name = frame.read_string();
+                    const arg_count = frame.read_byte();
+                    const superclass = self.pop().as_obj().as_class();
+                    try self.invoke_from_class(superclass, method_name, arg_count);
+                    frame = &self.frames[self.frame_count - 1];
+                },
+                .inherit => {
+                    const superclass = self.peek(1);
+                    if (!superclass.is_class()) {
+                        self.runtime_error("superclass must be a class\n", .{});
+                        return InterpretError.runtime;
+                    }
+                    var subclass = self.peek(0).as_obj().as_class();
+                    subclass.inherit(superclass.as_obj().as_class());
+                    _ = self.pop();
                 },
 
                 // literals
@@ -527,7 +553,7 @@ pub const VM = struct {
     fn invoke(self: *VM, name: *ObjString, arg_count: u8) !void {
         var receiver = self.peek(arg_count);
         if (!receiver.is_instance()) {
-            self.runtime_error("only instances have method\n", .{});
+            self.runtime_error("only instances have methods\n", .{});
             return InterpretError.runtime;
         }
         var instance = receiver.as_obj().as_instance();
@@ -575,7 +601,7 @@ pub const VM = struct {
     }
 
     fn close_upvalues(self: *VM, last: *Value) void {
-        while (self.open_upvalues != null and @ptrToInt(self.open_upvalues.?) > @ptrToInt(last)) {
+        while (self.open_upvalues != null and @ptrToInt(self.open_upvalues.?.location) >= @ptrToInt(last)) {
             var upvalue = self.open_upvalues.?;
             upvalue.closed = upvalue.location.*;
             upvalue.location = &upvalue.closed;

@@ -90,7 +90,7 @@ const RULES = [_]ParseRule{
     .{ .prefix = null, .infix = Compiler.logical_or, .precedence = ._or }, // logical_or,
     .{ .prefix = null, .infix = null, .precedence = .none }, // print,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_return,
-    .{ .prefix = null, .infix = null, .precedence = .none }, // super,
+    .{ .prefix = Compiler.super, .infix = null, .precedence = .none }, // super,
     .{ .prefix = Compiler.this, .infix = null, .precedence = .none }, // this,
     .{ .prefix = Compiler.literal, .infix = null, .precedence = .none }, // logical_true,
     .{ .prefix = null, .infix = null, .precedence = .none }, // cf_var,
@@ -147,6 +147,7 @@ const FunctionType = enum {
 
 const ClassCompiler = struct {
     enclosing: ?*ClassCompiler,
+    has_superclass: bool = false,
 };
 
 pub const Compiler = struct {
@@ -193,12 +194,11 @@ pub const Compiler = struct {
         };
 
         // reserve the first local slot for compiler use
-        compiler.add_local(.{
-            .t = TokenType.nil,
-            .start = if (function_type == .function) "" else "this",
-            .length = if (function_type == .function) 0 else 4,
-            .line = 0,
-        });
+        if (function_type != .function) {
+            compiler.add_local(Token.synthetic(TokenType.this, "this"));
+        } else {
+            compiler.add_local(Token.synthetic(TokenType.nil, ""));
+        }
         compiler.locals[0].depth = 0;
         compiler.mark_initialized();
 
@@ -352,6 +352,29 @@ pub const Compiler = struct {
             return;
         }
         self.variable(false);
+    }
+
+    fn super(self: *Compiler, _: bool) void {
+        if (self.current_class == null) {
+            self.parser.error_at_previous("can't use 'super' outside of a class");
+        } else if (!self.current_class.?.has_superclass) {
+            self.parser.error_at_previous("can't use 'super' in a class without a superclass");
+        }
+
+        self.parser.consume(TokenType.dot, "expect '.' after 'super'");
+        self.parser.consume(TokenType.identifier, "expect superclass method name");
+        const name_idx = self.identifier_constant(self.parser.previous);
+
+        self.named_variable(Token.synthetic(TokenType.this, "this"), false);
+        if (self.parser.match(TokenType.left_paren)) {
+            const arg_count = self.argument_list();
+            self.named_variable(Token.synthetic(TokenType.super, "super"), false);
+            self.emit_compound(OpCode.super_invoke, name_idx);
+            self.emit_byte(arg_count);
+        } else {
+            self.named_variable(Token.synthetic(TokenType.super, "super"), false);
+            self.emit_compound(OpCode.get_super, name_idx);
+        }
     }
 
     fn named_variable(self: *Compiler, token: Token, can_assign: bool) void {
@@ -655,6 +678,23 @@ pub const Compiler = struct {
         var class_compiler = ClassCompiler{ .enclosing = self.current_class };
         self.current_class = &class_compiler;
 
+        if (self.parser.match(TokenType.less)) {
+            self.parser.consume(TokenType.identifier, "expect superclass name");
+            self.variable(false);
+
+            if (name.equals(self.parser.previous)) {
+                self.parser.error_at_previous("class can't inherit from itself");
+            }
+
+            self.begin_scope();
+            self.add_local(Token.synthetic(TokenType.super, "super"));
+            self.define_variable(0);
+
+            self.named_variable(name, false);
+            self.emit_opcode(OpCode.inherit);
+            class_compiler.has_superclass = true;
+        }
+
         self.named_variable(name, false);
 
         self.parser.consume(TokenType.left_brace, "expect '{' before class body");
@@ -663,6 +703,10 @@ pub const Compiler = struct {
         }
         self.parser.consume(TokenType.right_brace, "expect '}' after class bod");
         self.emit_opcode(OpCode.pop);
+
+        if (class_compiler.has_superclass) {
+            self.end_scope();
+        }
 
         self.current_class = self.current_class.?.enclosing;
     }

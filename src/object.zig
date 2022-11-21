@@ -496,6 +496,15 @@ pub const ObjClass = struct {
         self.methods.deinit();
     }
 
+    pub fn inherit(self: *ObjClass, super: *ObjClass) void {
+        var new_methods = super.methods.clone() catch {
+            std.debug.print("out of memory\n", .{});
+            std.process.exit(1);
+        };
+        self.methods.deinit();
+        self.methods = new_methods;
+    }
+
     pub fn format(
         self: ObjClass,
         comptime fmt: []const u8,
