@@ -139,7 +139,7 @@ pub const VM = struct {
         var object: ?*Obj = self.objects;
         while (object) |o| {
             const next: ?*Obj = o.next;
-            o.deinit(self.allocator);
+            o.deinit();
             self.allocator.destroy(o);
             object = next;
         }

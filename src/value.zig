@@ -9,7 +9,7 @@ const Obj = obj.Obj;
 
 pub const Value = if (build_options.value_union) ValueUnion else ValuePack;
 
-const ValuePack = union(enum) {
+const ValuePack = struct {
     payload: u64,
 
     const QNAN: u64 = 0x7ffc000000000000;
@@ -132,7 +132,7 @@ const ValuePack = union(enum) {
         } else if (self.is_number()) {
             try writer.print("{d}", .{self.as_number()});
         } else {
-            try writer.print("{}", .{self.as_obj()});
+            try self.as_obj().print(writer);
         }
     }
 };

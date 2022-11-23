@@ -16,6 +16,13 @@ pub fn alloc_or_die(allocator: std.mem.Allocator, comptime T: type, len: usize) 
     };
 }
 
+pub fn alloc_aligned_or_die(allocator: std.mem.Allocator, len: usize) []align(8) u8 {
+    return allocator.alignedAlloc(u8, 8, len) catch {
+        std.debug.print("Out of memory\n", .{});
+        std.process.exit(1);
+    };
+}
+
 pub fn create_or_die(allocator: std.mem.Allocator, comptime T: type) *T {
     return allocator.create(T) catch {
         std.debug.print("Out of memory\n", .{});

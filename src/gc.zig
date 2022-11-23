@@ -9,7 +9,14 @@ const vlu = @import("value.zig");
 const Value = vlu.Value;
 const ValueArray = vlu.ValueArray;
 
-const Obj = @import("object.zig").Obj;
+const ob = @import("object.zig");
+const Obj = ob.Obj;
+const ObjString = ob.ObjString;
+const ObjClosure = ob.ObjClosure;
+const ObjFunction = ob.ObjFunction;
+const ObjClass = ob.ObjClass;
+const ObjUpValue = ob.ObjUpValue;
+const get_obj = ob.get_obj;
 
 const common = @import("common.zig");
 
@@ -81,7 +88,7 @@ pub const GCAllocator = struct {
         self.mark_frames();
         self.mark_upvalues();
         if (self.vm.?.init_string) |s| {
-            self.mark_object(s.header.?);
+            self.mark_object(get_obj(ObjString, s));
         }
     }
 
@@ -106,7 +113,7 @@ pub const GCAllocator = struct {
     fn mark_table(self: *GCAllocator, table: *VariableHashMap) void {
         var it = table.iterator();
         while (it.next()) |entry| {
-            self.mark_object(entry.key_ptr.*.header.?);
+            self.mark_object(get_obj(ObjString, entry.key_ptr.*));
             self.mark_value(entry.value_ptr);
         }
     }
@@ -115,14 +122,14 @@ pub const GCAllocator = struct {
         for (self.vm.?.frames) |frame, index| {
             if (index == self.vm.?.frame_count) break;
 
-            self.mark_object(frame.closure.header.?);
+            self.mark_object(get_obj(ObjClosure, frame.closure));
         }
     }
 
     fn mark_upvalues(self: *GCAllocator) void {
         var upvalue = self.vm.?.open_upvalues;
         while (upvalue) |uv| {
-            self.mark_object(uv.header.?);
+            self.mark_object(get_obj(ObjUpValue, uv));
             upvalue = uv.next;
         }
     }
@@ -152,33 +159,33 @@ pub const GCAllocator = struct {
             .function => {
                 var function = obj.as_function();
                 if (function.name) |name| {
-                    self.mark_object(name.header.?);
+                    self.mark_object(get_obj(ObjString, name));
                 }
                 self.mark_array(&function.chunk.constants);
             },
             .closure => {
                 var closure = obj.as_closure();
-                self.mark_object(closure.function.header.?);
+                self.mark_object(get_obj(ObjFunction, closure.function));
                 for (closure.upvalues) |upvalue| {
                     if (upvalue) |uv| {
-                        self.mark_object(uv.header.?);
+                        self.mark_object(get_obj(ObjUpValue, uv));
                     }
                 }
             },
             .class => {
                 var class = obj.as_class();
-                self.mark_object(class.name.header.?);
+                self.mark_object(get_obj(ObjString, class.name));
                 self.mark_table(&class.methods);
             },
             .instance => {
                 var instance = obj.as_instance();
-                self.mark_object(instance.class.header.?);
+                self.mark_object(get_obj(ObjClass, instance.class));
                 self.mark_table(&instance.fields);
             },
             .bound_method => {
                 var bound_method = obj.as_bound_method();
                 self.mark_value(&bound_method.receiver);
-                self.mark_object(bound_method.method.header.?);
+                self.mark_object(get_obj(ObjClosure, bound_method.method));
             },
             else => {},
         }
@@ -188,8 +195,7 @@ pub const GCAllocator = struct {
         var strings = self.vm.?.strings;
         var iter = strings.keyIterator();
         while (iter.next()) |key| {
-            // it's possible an ObjString has been interned, but its header not allocated yet
-            if (key.*.header != null and !key.*.header.?.is_marked) {
+            if (!get_obj(ObjString, key.*).is_marked) {
                 if (self.debug_log) {
                     std.debug.print("removing interned string {s}\n", .{key.*});
                 }
@@ -216,7 +222,7 @@ pub const GCAllocator = struct {
                     self.vm.?.objects = current;
                 }
 
-                unreached.deinit(gc_allocator);
+                unreached.deinit();
                 gc_allocator.destroy(unreached);
             }
         }

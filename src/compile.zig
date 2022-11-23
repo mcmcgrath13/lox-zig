@@ -963,7 +963,7 @@ pub const Compiler = struct {
     fn end(self: *Compiler) *Obj {
         self.emit_return();
         if (self.debug and !self.parser.had_error) {
-            disassemble_chunk(self.current_chunk(), self.function);
+            disassemble_chunk(self.current_chunk(), self.function.as_function());
         }
 
         return self.function;
