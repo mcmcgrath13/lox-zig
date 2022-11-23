@@ -1,7 +1,7 @@
 // this file is the entrypoint for the executable zig binary
 const std = @import("std");
 
-const lox = @import("lox");
+const lox = @import("lox.zig");
 const InterpretError = lox.InterpretError;
 
 pub fn main() anyerror!void {
@@ -21,6 +21,7 @@ pub fn main() anyerror!void {
 
     // TODO: put debug bool behind an args flag
     var options = lox.Options.init_all();
+    options = lox.Options{};
     options.debug_stress_gc = false;
     options.debug_gc = false;
     var vm = lox.Lox.init(options, allocator);
