@@ -4,10 +4,15 @@ pub fn build(b: *std.build.Builder) void {
     const target = b.standardTargetOptions(.{});
     const mode = b.standardReleaseOptions();
 
+    const value_union = b.option(bool, "value-union", "use union values instead of packed values") orelse false;
+    
+    const exe_options = b.addOptions();
+    exe_options.addOption(bool, "value_union", value_union);
+
     const exe = b.addExecutable("lox", "src/runner.zig");
-    exe.addPackagePath("lox", "src/lox.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
+    exe.addOptions("build_options", exe_options);
     exe.install();
 
     const run_cmd = exe.run();
