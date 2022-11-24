@@ -18,6 +18,8 @@ const Obj = obj.Obj;
 const new_function = obj.new_function;
 const new_string = obj.new_string;
 
+const log = std.log.scoped(.compiler);
+
 const ObjStringHashMap = @import("vm.zig").ObjStringHashMap;
 
 const compile_err = error.CompileFailed;
@@ -1048,18 +1050,18 @@ const Parser = struct {
 
         self.panic_mode = true;
 
-        std.log.err("[line {d}] Error", .{token.line});
+        log.err("[line {d}] Error", .{token.line});
 
         switch (token.t) {
-            .eof => std.log.err(" at end", .{}),
+            .eof => log.err(" at end", .{}),
             .scan_error => {},
-            else => std.log.err(" at {s}", .{token.start[0..token.length]}),
+            else => log.err(" at {s}", .{token.start[0..token.length]}),
         }
 
         // if there is no message, use the token content, which in the case of scan_error token's
         // is actually the message itself
         const message_str: []const u8 = message orelse token.start[0..token.length];
-        std.log.err(": {s}\n", .{message_str});
+        log.err(": {s}\n", .{message_str});
         self.had_error = true;
     }
 };

@@ -21,6 +21,8 @@ const get_obj = ob.get_obj;
 
 const common = @import("common.zig");
 
+const log = std.log.scoped(.gc);
+
 const GC_HEAP_GROW_FACTOR = 2;
 
 pub const GCAllocator = struct {
@@ -33,7 +35,7 @@ pub const GCAllocator = struct {
     gray_stack: ArrayList(*Obj),
 
     bytes_allocated: usize = 0,
-    next_gc: usize = 1024,
+    next_gc: usize = 1024 * 1024,
 
     pub fn init(
         backing_allocator: Allocator,
@@ -60,7 +62,7 @@ pub const GCAllocator = struct {
         if (self.vm == null or self.vm.?.compiling) return;
 
         if (self.debug_log) {
-            std.log.debug("-- gc begin \n", .{});
+            log.debug("-- gc begin \n", .{});
         }
         const before = self.bytes_allocated;
 
@@ -72,8 +74,8 @@ pub const GCAllocator = struct {
         self.next_gc = self.bytes_allocated * GC_HEAP_GROW_FACTOR;
 
         if (self.debug_log) {
-            std.log.debug("-- gc end \n", .{});
-            std.log.debug("collected {d} bytes (from {d} to {d}) - next garbage collection at {d}\n", .{ before - self.bytes_allocated, before, self.bytes_allocated, self.next_gc });
+            log.debug("-- gc end \n", .{});
+            log.debug("collected {d} bytes (from {d} to {d}) - next garbage collection at {d}\n", .{ before - self.bytes_allocated, before, self.bytes_allocated, self.next_gc });
         }
     }
 
@@ -103,7 +105,7 @@ pub const GCAllocator = struct {
         obj.is_marked = true;
         common.write_or_die(*Obj, &self.gray_stack, obj);
         if (self.debug_log) {
-            std.log.debug("{*} mark {any}\n", .{ obj, obj });
+            log.debug("{*} mark {any}\n", .{ obj, Value.obj(obj) });
         }
     }
 
@@ -150,7 +152,7 @@ pub const GCAllocator = struct {
 
     fn blacken_object(self: *GCAllocator, obj: *Obj) void {
         if (self.debug_log) {
-            std.log.debug("{*} blacken {any}\n", .{ obj, obj });
+            log.debug("{*} blacken {any}\n", .{ obj, Value.obj(obj) });
         }
 
         switch (obj.t) {
@@ -198,7 +200,7 @@ pub const GCAllocator = struct {
         while (iter.next()) |key| {
             if (!get_obj(ObjString, key.*).is_marked) {
                 if (self.debug_log) {
-                    std.log.debug("removing interned string {s}\n", .{key.*});
+                    log.debug("removing interned string {s}\n", .{key.*});
                 }
                 _ = strings.remove(key.*);
             }
@@ -241,7 +243,7 @@ pub const GCAllocator = struct {
         const res = try self.backing_allocator.rawAlloc(len, ptr_align, len_align, ret_addr);
         self.bytes_allocated += len;
         if (self.debug_log) {
-            std.log.debug("{*} allocate {d}\n", .{ res, len });
+            log.debug("{*} allocate {d}\n", .{ res, len });
         }
         return res;
     }
@@ -259,7 +261,7 @@ pub const GCAllocator = struct {
         const res = self.backing_allocator.rawResize(old_mem, old_align, new_size, len_align, ret_addr);
         self.bytes_allocated += new_size - old_mem.len;
         if (self.debug_log and res != null) {
-            std.log.debug("{*} resized from {d} to {d}\n", .{
+            log.debug("{*} resized from {d} to {d}\n", .{
                 old_mem,
                 old_mem.len,
                 new_size,
@@ -277,7 +279,7 @@ pub const GCAllocator = struct {
         self.backing_allocator.rawFree(old_mem, old_align, ret_addr);
         self.bytes_allocated -= old_mem.len;
         if (self.debug_log) {
-            std.log.debug("{*} freed {d}\n", .{ old_mem, old_mem.len });
+            log.debug("{*} freed {d}\n", .{ old_mem, old_mem.len });
         }
     }
 };

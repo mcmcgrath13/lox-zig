@@ -32,6 +32,8 @@ const new_bound_method = obj.new_bound_method;
 
 const common = @import("common.zig");
 
+const log = std.log.scoped(.runtime);
+
 const FRAME_MAX = 64;
 const STACK_MAX = FRAME_MAX * std.math.maxInt(u8);
 
@@ -225,14 +227,14 @@ pub const VM = struct {
         while (true) {
             if (self.options.debug_runtime) {
                 // print stack
-                std.log.debug("          ", .{});
-                for (self.stack) |value| {
-                    if (@ptrToInt(&value) == @ptrToInt(self.stack_top)) {
+                log.debug("          ", .{});
+                for (self.stack) |value, i| {
+                    if (@ptrToInt(self.stack.ptr + i) == @ptrToInt(self.stack_top)) {
                         break;
                     }
-                    std.log.debug("[{}]", .{value});
+                    log.debug("[{}]", .{value});
                 }
-                std.log.debug("\n", .{});
+                log.debug("\n", .{});
 
                 _ = disassemble_instruction(&frame.closure.function.chunk, @ptrToInt(frame.ip) - @ptrToInt(frame.closure.function.chunk.code.items.ptr));
             }
@@ -245,7 +247,7 @@ pub const VM = struct {
                 .define_global => {
                     var name = frame.read_string();
                     self.globals.put(name, self.peek(0)) catch {
-                        std.log.err("Out of memory!\n", .{});
+                        log.err("Out of memory!\n", .{});
                         std.process.exit(1);
                     };
                     _ = self.pop();
@@ -635,7 +637,7 @@ pub const VM = struct {
             self.allocator,
         )));
         self.globals.put(self.peek(1).as_obj().as_string(), self.peek(0)) catch {
-            std.log.err("Out of memory!\n", .{});
+            log.err("Out of memory!\n", .{});
             std.process.exit(1);
         };
         _ = self.pop();
@@ -647,7 +649,7 @@ pub const VM = struct {
         comptime format: []const u8,
         args: anytype,
     ) void {
-        std.log.err(format, args);
+        log.err(format, args);
 
         var i = self.frame_count;
         while (i > 0) : (i -= 1) {
@@ -655,7 +657,7 @@ pub const VM = struct {
             const chunk = frame.closure.function.chunk;
             const instruction: usize = @ptrToInt(frame.ip) - @ptrToInt(chunk.code.items.ptr) - 1;
             const line: usize = chunk.lines.items[instruction];
-            std.log.err("[line {d}] in {}\n", .{ line, frame.closure });
+            log.err("[line {d}] in {}\n", .{ line, frame.closure });
         }
 
         self.reset_stack();
