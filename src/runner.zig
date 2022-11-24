@@ -28,10 +28,10 @@ pub fn main() anyerror!void {
     defer vm.deinit();
 
     switch (args.len) {
-        1 => repl(&vm),
+        1 => try repl(&vm),
         2 => run_file(&vm, allocator, args[1]),
         else => {
-            std.debug.print("Usage: lox [path]\n", .{});
+            std.log.err("Usage: lox [path]\n", .{});
             std.process.exit(64);
         },
     }
@@ -50,36 +50,34 @@ fn next_line(reader: anytype, buffer: []u8) ?[]const u8 {
     }
 }
 
-fn repl(vm: *lox.Lox) void {
-    const stdout = std.io.getStdOut();
+fn repl(vm: *lox.Lox) !void {
+    const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn();
 
     var buffer: [1024]u8 = undefined;
 
     while (true) {
-        stdout.writeAll("\n>") catch {
-            std.debug.print("couldn't write", .{});
-        };
+        try stdout.print("\n>", .{});
 
         // break if no input is passed (ctrl+d)
         const input = (next_line(stdin.reader(), &buffer)) orelse {
-            std.debug.print("\n", .{});
+            try stdout.print("\n", .{});
             break;
         };
 
-        std.debug.print("{s} ({d})\n", .{ input, input.len });
+        try stdout.print("{s} ({d})\n", .{ input, input.len });
 
         // clear the buffer maybe?
 
         vm.interpret(input) catch {
-            std.debug.print("ERROR", .{});
+            std.log.err("ERROR", .{});
         };
     }
 }
 
 fn run_file(vm: *lox.Lox, allocator: std.mem.Allocator, path: []u8) void {
     const file = std.fs.cwd().openFile(path, .{}) catch {
-        std.debug.print("Could not open file", .{});
+        std.log.err("Could not open file", .{});
         std.process.exit(74);
     };
     defer file.close();
@@ -88,7 +86,7 @@ fn run_file(vm: *lox.Lox, allocator: std.mem.Allocator, path: []u8) void {
         allocator,
         std.math.maxInt(usize),
     ) catch {
-        std.debug.print("Could not read file", .{});
+        std.log.err("Could not read file", .{});
         std.process.exit(74);
     };
     defer allocator.free(contents);

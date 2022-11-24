@@ -202,7 +202,7 @@ fn get_or_put_interned_string(
         var obj = alloc_obj(ObjString, new_objstr.*, .string, objects, allocator);
         var objstr = obj.as_string();
         strings.put(objstr, {}) catch {
-            std.debug.print("Out of memory\n", .{});
+            std.log.err("Out of memory\n", .{});
             std.process.exit(1);
         };
         return obj;
@@ -401,7 +401,7 @@ pub const ObjClass = struct {
 
     pub fn inherit(self: *ObjClass, super: *ObjClass) void {
         var new_methods = super.methods.clone() catch {
-            std.debug.print("out of memory\n", .{});
+            std.log.err("out of memory\n", .{});
             std.process.exit(1);
         };
         self.methods.deinit();

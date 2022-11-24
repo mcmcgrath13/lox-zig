@@ -94,7 +94,7 @@ pub const Chunk = struct {
         value: T,
     ) void {
         list.append(self.allocator, value) catch {
-            std.debug.print("Out of memory\n", .{});
+            std.log.err("Out of memory\n", .{});
             std.process.exit(1);
         };
     }

@@ -6,7 +6,7 @@ const OpCode = chunk.OpCode;
 const read_short = @import("common.zig").read_short;
 
 pub fn disassemble_chunk(c: *Chunk, name: anytype) void {
-    std.debug.print("==={s}===\n", .{name});
+    std.log.debug("==={s}===\n", .{name});
 
     var offset: usize = 0;
     while (offset < c.length()) {
@@ -15,13 +15,13 @@ pub fn disassemble_chunk(c: *Chunk, name: anytype) void {
 }
 
 pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
-    std.debug.print("{d:0>4} ", .{offset});
+    std.log.debug("{d:0>4} ", .{offset});
 
     // print line number
     if ((offset > 0) and (c.lines.items[offset] == c.lines.items[offset - 1])) {
-        std.debug.print("   | ", .{});
+        std.log.debug("   | ", .{});
     } else {
-        std.debug.print("{d: >4} ", .{c.lines.items[offset]});
+        std.log.debug("{d: >4} ", .{c.lines.items[offset]});
     }
 
     const instruction_byte = c.code.items[offset];
@@ -76,13 +76,13 @@ pub fn disassemble_instruction(c: *Chunk, offset: usize) usize {
 }
 
 pub fn simple_instruction(name: []const u8, offset: usize) usize {
-    std.debug.print("{s}\n", .{name});
+    std.log.debug("{s}\n", .{name});
     return offset + 1;
 }
 
 pub fn constant_instruction(name: []const u8, c: *Chunk, offset: usize) usize {
     const constant_idx: usize = c.code.items[offset + 1];
-    std.debug.print(
+    std.log.debug(
         "{s: <16} {d: >4} '{}'\n",
         .{ name, constant_idx, c.constants.items[constant_idx] },
     );
@@ -96,7 +96,7 @@ pub fn closure_instruction(
 ) usize {
     var offset = original_offset + 1;
     const constant_idx: usize = c.code.items[offset];
-    std.debug.print(
+    std.log.debug(
         "{s: <16} {d: >4} '{}'\n",
         .{ name, constant_idx, c.constants.items[constant_idx] },
     );
@@ -107,7 +107,7 @@ pub fn closure_instruction(
     while (i < function.upvalue_count) : (i += 1) {
         const is_local = if (c.code.items[offset] == 1) "local" else "upvalue";
         const index = c.code.items[offset + 1];
-        std.debug.print(
+        std.log.debug(
             "{d:0>4}      |                     {s} {d}\n",
             .{ offset, is_local, index },
         );
@@ -119,7 +119,7 @@ pub fn closure_instruction(
 
 fn byte_instruction(name: []const u8, c: *Chunk, offset: usize) usize {
     const byte_idx: usize = c.code.items[offset + 1];
-    std.debug.print("{s: <16} {d: >4}\n", .{ name, byte_idx });
+    std.log.debug("{s: <16} {d: >4}\n", .{ name, byte_idx });
     return offset + 2;
 }
 
@@ -131,7 +131,7 @@ fn jump_instruction(
 ) usize {
     const jump_size = read_short(.{ c.code.items[offset + 1], c.code.items[offset + 2] });
     const sign: i32 = if (positive_jump) 1 else -1;
-    std.debug.print("{s: <16} {d: >4} -> {d}\n", .{ name, offset, @intCast(i32, offset + 3) + sign * jump_size });
+    std.log.debug("{s: <16} {d: >4} -> {d}\n", .{ name, offset, @intCast(i32, offset + 3) + sign * jump_size });
     return offset + 3;
 }
 
@@ -142,7 +142,7 @@ fn invoke_instruction(
 ) usize {
     const constant_idx: usize = c.code.items[offset + 1];
     const arg_count: usize = c.code.items[offset + 2];
-    std.debug.print(
+    std.log.debug(
         "{s: <16} ({d} args) {d: >4} '{s}'\n",
         .{ name, arg_count, constant_idx, c.constants.items[constant_idx] },
     );

@@ -1048,18 +1048,18 @@ const Parser = struct {
 
         self.panic_mode = true;
 
-        std.debug.print("[line {d}] Error", .{token.line});
+        std.log.err("[line {d}] Error", .{token.line});
 
         switch (token.t) {
-            .eof => std.debug.print(" at end", .{}),
+            .eof => std.log.err(" at end", .{}),
             .scan_error => {},
-            else => std.debug.print(" at {s}", .{token.start[0..token.length]}),
+            else => std.log.err(" at {s}", .{token.start[0..token.length]}),
         }
 
         // if there is no message, use the token content, which in the case of scan_error token's
         // is actually the message itself
         const message_str: []const u8 = message orelse token.start[0..token.length];
-        std.debug.print(": {s}\n", .{message_str});
+        std.log.err(": {s}\n", .{message_str});
         self.had_error = true;
     }
 };
