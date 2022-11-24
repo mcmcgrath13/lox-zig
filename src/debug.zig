@@ -84,7 +84,7 @@ pub fn constant_instruction(name: []const u8, c: *Chunk, offset: usize) usize {
     const constant_idx: usize = c.code.items[offset + 1];
     std.debug.print(
         "{s: <16} {d: >4} '{}'\n",
-        .{ name, constant_idx, c.constants.values.items[constant_idx] },
+        .{ name, constant_idx, c.constants.items[constant_idx] },
     );
     return offset + 2;
 }
@@ -98,11 +98,11 @@ pub fn closure_instruction(
     const constant_idx: usize = c.code.items[offset];
     std.debug.print(
         "{s: <16} {d: >4} '{}'\n",
-        .{ name, constant_idx, c.constants.values.items[constant_idx] },
+        .{ name, constant_idx, c.constants.items[constant_idx] },
     );
     offset += 1;
 
-    var function = c.constants.values.items[constant_idx].as_obj().as_function();
+    var function = c.constants.items[constant_idx].as_obj().as_function();
     var i: u8 = 0;
     while (i < function.upvalue_count) : (i += 1) {
         const is_local = if (c.code.items[offset] == 1) "local" else "upvalue";
@@ -144,7 +144,7 @@ fn invoke_instruction(
     const arg_count: usize = c.code.items[offset + 2];
     std.debug.print(
         "{s: <16} ({d} args) {d: >4} '{s}'\n",
-        .{ name, arg_count, constant_idx, c.constants.values.items[constant_idx] },
+        .{ name, arg_count, constant_idx, c.constants.items[constant_idx] },
     );
     return offset + 3;
 }

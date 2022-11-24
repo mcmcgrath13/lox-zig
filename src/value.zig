@@ -277,25 +277,3 @@ const ValueUnion = union(enum) {
         }
     }
 };
-
-pub const ValueArray = struct {
-    values: ArrayList(Value),
-
-    pub fn init(allocator: std.mem.Allocator) ValueArray {
-        var arr = ArrayList(Value).init(allocator);
-        return ValueArray{ .values = arr };
-    }
-
-    pub fn deinit(self: *ValueArray) void {
-        self.values.deinit();
-    }
-
-    // if we're out of memory, bail out
-    pub fn write(self: *ValueArray, value: Value) void {
-        common.write_or_die(Value, &self.values, value);
-    }
-
-    pub fn length(self: *ValueArray) usize {
-        return self.values.items.len;
-    }
-};

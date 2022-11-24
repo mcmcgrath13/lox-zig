@@ -10,7 +10,7 @@ const vm = @import("vm.zig");
 const ObjStringHashMap = vm.ObjStringHashMap;
 const VariableHashMap = vm.VariableHashMap;
 
-const ObjType = enum(u8) {
+const ObjType = enum {
     string,
     function,
     native,
@@ -30,16 +30,16 @@ pub const Obj = struct {
         return Obj{ .t = t };
     }
 
-    pub fn deinit(self: *Obj) void {
+    pub fn deinit(self: *Obj, allocator: std.mem.Allocator) void {
         switch (self.t) {
             .string => {
-                self.as_string().deinit();
+                self.as_string().deinit(allocator);
             },
             .function => {
                 self.as_function().deinit();
             },
             .closure => {
-                self.as_closure().deinit();
+                self.as_closure().deinit(allocator);
             },
             .class => {
                 self.as_class().deinit();
@@ -59,7 +59,6 @@ pub const Obj = struct {
     }
 
     pub fn equals(self: *Obj, other: *Obj) bool {
-        // TODO: is this right? (pointer equality)
         return self == other;
     }
 
@@ -126,12 +125,13 @@ fn alloc_obj(
 ) *Obj {
     var memory = common.alloc_aligned_or_die(allocator, @sizeOf(Obj) + @sizeOf(T));
     var ptr = memory.ptr;
+
     var obj_ptr = @ptrCast(*Obj, ptr);
     obj_ptr.* = Obj.init(obj_type);
+    obj_ptr.update_next(objects);
+
     var objt_ptr = @ptrCast(*T, ptr + @sizeOf(Obj));
     objt_ptr.* = objt;
-
-    obj_ptr.update_next(objects);
 
     return obj_ptr;
 }
@@ -145,8 +145,6 @@ pub fn get_obj(comptime T: type, objt: *T) *Obj {
 pub const ObjString = struct {
     data: []const u8,
 
-    allocator: std.mem.Allocator,
-
     pub fn init(string: []const u8, allocator: std.mem.Allocator, take: bool) ObjString {
         const data = if (!take) ifb: {
             const data = common.alloc_or_die(allocator, u8, string.len);
@@ -156,11 +154,11 @@ pub const ObjString = struct {
             break :elseb string;
         };
 
-        return ObjString{ .data = data, .allocator = allocator };
+        return ObjString{ .data = data };
     }
 
-    pub fn deinit(self: *ObjString) void {
-        self.allocator.free(self.data);
+    pub fn deinit(self: *ObjString, allocator: std.mem.Allocator) void {
+        allocator.free(self.data);
     }
 
     pub fn format(
@@ -198,7 +196,7 @@ fn get_or_put_interned_string(
 ) *Obj {
     if (strings.getKey(new_objstr)) |interned_objstr| {
         var objstr = interned_objstr;
-        new_objstr.deinit();
+        new_objstr.deinit(allocator);
         return get_obj(ObjString, objstr);
     } else {
         var obj = alloc_obj(ObjString, new_objstr.*, .string, objects, allocator);
@@ -276,8 +274,6 @@ pub const ObjClosure = struct {
     function: *ObjFunction,
     upvalues: []?*ObjUpValue,
 
-    allocator: std.mem.Allocator,
-
     pub fn init(
         function: *ObjFunction,
         allocator: std.mem.Allocator,
@@ -292,12 +288,11 @@ pub const ObjClosure = struct {
         return ObjClosure{
             .function = function,
             .upvalues = upvalues,
-            .allocator = allocator,
         };
     }
 
-    pub fn deinit(self: *ObjClosure) void {
-        self.allocator.free(self.upvalues);
+    pub fn deinit(self: *ObjClosure, allocator: std.mem.Allocator) void {
+        allocator.free(self.upvalues);
     }
 
     pub fn format(

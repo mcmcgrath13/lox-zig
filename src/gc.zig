@@ -7,7 +7,8 @@ const VariableHashMap = @import("vm.zig").VariableHashMap;
 
 const vlu = @import("value.zig");
 const Value = vlu.Value;
-const ValueArray = vlu.ValueArray;
+
+const Chunk = @import("chunk.zig").Chunk;
 
 const ob = @import("object.zig");
 const Obj = ob.Obj;
@@ -134,8 +135,8 @@ pub const GCAllocator = struct {
         }
     }
 
-    fn mark_array(self: *GCAllocator, array: *ValueArray) void {
-        for (array.values.items) |*item| {
+    fn mark_constants(self: *GCAllocator, chunk: *Chunk) void {
+        for (chunk.constants.items) |*item| {
             self.mark_value(item);
         }
     }
@@ -161,7 +162,7 @@ pub const GCAllocator = struct {
                 if (function.name) |name| {
                     self.mark_object(get_obj(ObjString, name));
                 }
-                self.mark_array(&function.chunk.constants);
+                self.mark_constants(&function.chunk);
             },
             .closure => {
                 var closure = obj.as_closure();
@@ -222,7 +223,7 @@ pub const GCAllocator = struct {
                     self.vm.?.objects = current;
                 }
 
-                unreached.deinit();
+                unreached.deinit(gc_allocator);
                 gc_allocator.destroy(unreached);
             }
         }

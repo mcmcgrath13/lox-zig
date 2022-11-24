@@ -81,7 +81,7 @@ const CallFrame = struct {
     }
 
     fn read_constant(self: *CallFrame) Value {
-        return self.closure.function.chunk.constants.values.items[self.read_byte()];
+        return self.closure.function.chunk.constants.items[self.read_byte()];
     }
 
     fn read_short(self: *CallFrame) u16 {
@@ -139,7 +139,7 @@ pub const VM = struct {
         var object: ?*Obj = self.objects;
         while (object) |o| {
             const next: ?*Obj = o.next;
-            o.deinit();
+            o.deinit(self.allocator);
             self.allocator.destroy(o);
             object = next;
         }

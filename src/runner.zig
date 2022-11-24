@@ -100,24 +100,3 @@ fn run_file(vm: *lox.Lox, allocator: std.mem.Allocator, path: []u8) void {
         }
     };
 }
-
-// TODO: make this a test, somewhere
-// var c = lox.chunk.Chunk.init(allocator);
-// defer c.deinit();
-//
-// c.write(@enumToInt(lox.chunk.OpCode.op_constant), 1);
-// c.write(c.add_constant(1.2), 1);
-//
-// c.write(@enumToInt(lox.chunk.OpCode.op_constant), 2);
-// c.write(c.add_constant(3.4), 2);
-//
-// c.write(@enumToInt(lox.chunk.OpCode.op_add), 3);
-//
-// c.write(@enumToInt(lox.chunk.OpCode.op_constant), 4);
-// c.write(c.add_constant(5.6), 4);
-//
-// c.write(@enumToInt(lox.chunk.OpCode.op_divide), 5);
-//
-// c.write(@enumToInt(lox.chunk.OpCode.op_negate), 6);
-//
-// c.write(@enumToInt(lox.chunk.OpCode.op_return), 7);
