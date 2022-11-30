@@ -4,6 +4,20 @@ const std = @import("std");
 const lox = @import("lox.zig");
 const InterpretError = lox.InterpretError;
 
+// Define root.log to override the std implementation
+pub fn log(
+    comptime _: std.log.Level,
+    comptime _: @TypeOf(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    // Print the message to stderr, silently ignoring any errors
+    std.debug.getStderrMutex().lock();
+    defer std.debug.getStderrMutex().unlock();
+    const stderr = std.io.getStdErr().writer();
+    nosuspend stderr.print(format, args) catch return;
+}
+
 pub fn main() anyerror!void {
     var gpa = std.heap.GeneralPurposeAllocator(.{
         .retain_metadata = true,
@@ -28,10 +42,10 @@ pub fn main() anyerror!void {
     defer vm.deinit();
 
     switch (args.len) {
-        1 => repl(&vm),
+        1 => try repl(&vm),
         2 => run_file(&vm, allocator, args[1]),
         else => {
-            std.debug.print("Usage: lox [path]\n", .{});
+            std.log.err("Usage: lox [path]\n", .{});
             std.process.exit(64);
         },
     }
@@ -50,36 +64,34 @@ fn next_line(reader: anytype, buffer: []u8) ?[]const u8 {
     }
 }
 
-fn repl(vm: *lox.Lox) void {
-    const stdout = std.io.getStdOut();
+fn repl(vm: *lox.Lox) !void {
+    const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn();
 
     var buffer: [1024]u8 = undefined;
 
     while (true) {
-        stdout.writeAll("\n>") catch {
-            std.debug.print("couldn't write", .{});
-        };
+        try stdout.print("\n>", .{});
 
         // break if no input is passed (ctrl+d)
         const input = (next_line(stdin.reader(), &buffer)) orelse {
-            std.debug.print("\n", .{});
+            try stdout.print("\n", .{});
             break;
         };
 
-        std.debug.print("{s} ({d})\n", .{ input, input.len });
+        try stdout.print("{s} ({d})\n", .{ input, input.len });
 
         // clear the buffer maybe?
 
         vm.interpret(input) catch {
-            std.debug.print("ERROR", .{});
+            std.log.err("ERROR", .{});
         };
     }
 }
 
 fn run_file(vm: *lox.Lox, allocator: std.mem.Allocator, path: []u8) void {
     const file = std.fs.cwd().openFile(path, .{}) catch {
-        std.debug.print("Could not open file", .{});
+        std.log.err("Could not open file", .{});
         std.process.exit(74);
     };
     defer file.close();
@@ -88,7 +100,7 @@ fn run_file(vm: *lox.Lox, allocator: std.mem.Allocator, path: []u8) void {
         allocator,
         std.math.maxInt(usize),
     ) catch {
-        std.debug.print("Could not read file", .{});
+        std.log.err("Could not read file", .{});
         std.process.exit(74);
     };
     defer allocator.free(contents);
@@ -100,24 +112,3 @@ fn run_file(vm: *lox.Lox, allocator: std.mem.Allocator, path: []u8) void {
         }
     };
 }
-
-// TODO: make this a test, somewhere
-// var c = lox.chunk.Chunk.init(allocator);
-// defer c.deinit();
-//
-// c.write(@enumToInt(lox.chunk.OpCode.op_constant), 1);
-// c.write(c.add_constant(1.2), 1);
-//
-// c.write(@enumToInt(lox.chunk.OpCode.op_constant), 2);
-// c.write(c.add_constant(3.4), 2);
-//
-// c.write(@enumToInt(lox.chunk.OpCode.op_add), 3);
-//
-// c.write(@enumToInt(lox.chunk.OpCode.op_constant), 4);
-// c.write(c.add_constant(5.6), 4);
-//
-// c.write(@enumToInt(lox.chunk.OpCode.op_divide), 5);
-//
-// c.write(@enumToInt(lox.chunk.OpCode.op_negate), 6);
-//
-// c.write(@enumToInt(lox.chunk.OpCode.op_return), 7);

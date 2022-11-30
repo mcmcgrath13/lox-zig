@@ -7,11 +7,21 @@ const VariableHashMap = @import("vm.zig").VariableHashMap;
 
 const vlu = @import("value.zig");
 const Value = vlu.Value;
-const ValueArray = vlu.ValueArray;
 
-const Obj = @import("object.zig").Obj;
+const Chunk = @import("chunk.zig").Chunk;
+
+const ob = @import("object.zig");
+const Obj = ob.Obj;
+const ObjString = ob.ObjString;
+const ObjClosure = ob.ObjClosure;
+const ObjFunction = ob.ObjFunction;
+const ObjClass = ob.ObjClass;
+const ObjUpValue = ob.ObjUpValue;
+const get_obj = ob.get_obj;
 
 const common = @import("common.zig");
+
+const log = std.log.scoped(.gc);
 
 const GC_HEAP_GROW_FACTOR = 2;
 
@@ -25,7 +35,7 @@ pub const GCAllocator = struct {
     gray_stack: ArrayList(*Obj),
 
     bytes_allocated: usize = 0,
-    next_gc: usize = 1024,
+    next_gc: usize = 1024 * 1024,
 
     pub fn init(
         backing_allocator: Allocator,
@@ -52,7 +62,7 @@ pub const GCAllocator = struct {
         if (self.vm == null or self.vm.?.compiling) return;
 
         if (self.debug_log) {
-            std.debug.print("-- gc begin \n", .{});
+            log.debug("-- gc begin \n", .{});
         }
         const before = self.bytes_allocated;
 
@@ -64,15 +74,15 @@ pub const GCAllocator = struct {
         self.next_gc = self.bytes_allocated * GC_HEAP_GROW_FACTOR;
 
         if (self.debug_log) {
-            std.debug.print("-- gc end \n", .{});
-            std.debug.print("collected {d} bytes (from {d} to {d}) - next garbage collection at {d}\n", .{ before - self.bytes_allocated, before, self.bytes_allocated, self.next_gc });
+            log.debug("-- gc end \n", .{});
+            log.debug("collected {d} bytes (from {d} to {d}) - next garbage collection at {d}\n", .{ before - self.bytes_allocated, before, self.bytes_allocated, self.next_gc });
         }
     }
 
     fn mark_roots(self: *GCAllocator) void {
         // the stack
-        for (self.vm.?.stack) |*slot, index| {
-            if (index == self.vm.?.stack_top) break;
+        for (self.vm.?.stack) |*slot| {
+            if (@ptrToInt(slot) == @ptrToInt(self.vm.?.stack_top)) break;
 
             self.mark_value(slot);
         }
@@ -81,7 +91,7 @@ pub const GCAllocator = struct {
         self.mark_frames();
         self.mark_upvalues();
         if (self.vm.?.init_string) |s| {
-            self.mark_object(s.header.?);
+            self.mark_object(get_obj(ObjString, s));
         }
     }
 
@@ -95,7 +105,7 @@ pub const GCAllocator = struct {
         obj.is_marked = true;
         common.write_or_die(*Obj, &self.gray_stack, obj);
         if (self.debug_log) {
-            std.debug.print("{*} mark {any}\n", .{ obj, obj });
+            log.debug("{*} mark {any}\n", .{ obj, Value.obj(obj) });
         }
     }
 
@@ -106,7 +116,7 @@ pub const GCAllocator = struct {
     fn mark_table(self: *GCAllocator, table: *VariableHashMap) void {
         var it = table.iterator();
         while (it.next()) |entry| {
-            self.mark_object(entry.key_ptr.*.header.?);
+            self.mark_object(get_obj(ObjString, entry.key_ptr.*));
             self.mark_value(entry.value_ptr);
         }
     }
@@ -115,20 +125,20 @@ pub const GCAllocator = struct {
         for (self.vm.?.frames) |frame, index| {
             if (index == self.vm.?.frame_count) break;
 
-            self.mark_object(frame.closure.header.?);
+            self.mark_object(get_obj(ObjClosure, frame.closure));
         }
     }
 
     fn mark_upvalues(self: *GCAllocator) void {
         var upvalue = self.vm.?.open_upvalues;
         while (upvalue) |uv| {
-            self.mark_object(uv.header.?);
+            self.mark_object(get_obj(ObjUpValue, uv));
             upvalue = uv.next;
         }
     }
 
-    fn mark_array(self: *GCAllocator, array: *ValueArray) void {
-        for (array.values.items) |*item| {
+    fn mark_constants(self: *GCAllocator, chunk: *Chunk) void {
+        for (chunk.constants.items) |*item| {
             self.mark_value(item);
         }
     }
@@ -142,7 +152,7 @@ pub const GCAllocator = struct {
 
     fn blacken_object(self: *GCAllocator, obj: *Obj) void {
         if (self.debug_log) {
-            std.debug.print("{*} blacken {any}\n", .{ obj, obj });
+            log.debug("{*} blacken {any}\n", .{ obj, Value.obj(obj) });
         }
 
         switch (obj.t) {
@@ -152,33 +162,33 @@ pub const GCAllocator = struct {
             .function => {
                 var function = obj.as_function();
                 if (function.name) |name| {
-                    self.mark_object(name.header.?);
+                    self.mark_object(get_obj(ObjString, name));
                 }
-                self.mark_array(&function.chunk.constants);
+                self.mark_constants(&function.chunk);
             },
             .closure => {
                 var closure = obj.as_closure();
-                self.mark_object(closure.function.header.?);
+                self.mark_object(get_obj(ObjFunction, closure.function));
                 for (closure.upvalues) |upvalue| {
                     if (upvalue) |uv| {
-                        self.mark_object(uv.header.?);
+                        self.mark_object(get_obj(ObjUpValue, uv));
                     }
                 }
             },
             .class => {
                 var class = obj.as_class();
-                self.mark_object(class.name.header.?);
+                self.mark_object(get_obj(ObjString, class.name));
                 self.mark_table(&class.methods);
             },
             .instance => {
                 var instance = obj.as_instance();
-                self.mark_object(instance.class.header.?);
+                self.mark_object(get_obj(ObjClass, instance.class));
                 self.mark_table(&instance.fields);
             },
             .bound_method => {
                 var bound_method = obj.as_bound_method();
                 self.mark_value(&bound_method.receiver);
-                self.mark_object(bound_method.method.header.?);
+                self.mark_object(get_obj(ObjClosure, bound_method.method));
             },
             else => {},
         }
@@ -188,10 +198,9 @@ pub const GCAllocator = struct {
         var strings = self.vm.?.strings;
         var iter = strings.keyIterator();
         while (iter.next()) |key| {
-            // it's possible an ObjString has been interned, but its header not allocated yet
-            if (key.*.header != null and !key.*.header.?.is_marked) {
+            if (!get_obj(ObjString, key.*).is_marked) {
                 if (self.debug_log) {
-                    std.debug.print("removing interned string {s}\n", .{key.*});
+                    log.debug("removing interned string {s}\n", .{key.*});
                 }
                 _ = strings.remove(key.*);
             }
@@ -234,7 +243,7 @@ pub const GCAllocator = struct {
         const res = try self.backing_allocator.rawAlloc(len, ptr_align, len_align, ret_addr);
         self.bytes_allocated += len;
         if (self.debug_log) {
-            std.debug.print("{*} allocate {d}\n", .{ res, len });
+            log.debug("{*} allocate {d}\n", .{ res, len });
         }
         return res;
     }
@@ -252,7 +261,7 @@ pub const GCAllocator = struct {
         const res = self.backing_allocator.rawResize(old_mem, old_align, new_size, len_align, ret_addr);
         self.bytes_allocated += new_size - old_mem.len;
         if (self.debug_log and res != null) {
-            std.debug.print("{*} resized from {d} to {d}\n", .{
+            log.debug("{*} resized from {d} to {d}\n", .{
                 old_mem,
                 old_mem.len,
                 new_size,
@@ -270,7 +279,7 @@ pub const GCAllocator = struct {
         self.backing_allocator.rawFree(old_mem, old_align, ret_addr);
         self.bytes_allocated -= old_mem.len;
         if (self.debug_log) {
-            std.debug.print("{*} freed {d}\n", .{ old_mem, old_mem.len });
+            log.debug("{*} freed {d}\n", .{ old_mem, old_mem.len });
         }
     }
 };

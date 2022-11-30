@@ -9,7 +9,7 @@ const Obj = obj.Obj;
 
 pub const Value = if (build_options.value_union) ValueUnion else ValuePack;
 
-const ValuePack = union(enum) {
+const ValuePack = struct {
     payload: u64,
 
     const QNAN: u64 = 0x7ffc000000000000;
@@ -132,7 +132,7 @@ const ValuePack = union(enum) {
         } else if (self.is_number()) {
             try writer.print("{d}", .{self.as_number()});
         } else {
-            try writer.print("{}", .{self.as_obj()});
+            try self.as_obj().print(writer);
         }
     }
 };
@@ -275,27 +275,5 @@ const ValueUnion = union(enum) {
             .val_number => try writer.print("{d}", .{self.as_number()}),
             .val_obj => try writer.print("{}", .{self.as_obj()}),
         }
-    }
-};
-
-pub const ValueArray = struct {
-    values: ArrayList(Value),
-
-    pub fn init(allocator: std.mem.Allocator) ValueArray {
-        var arr = ArrayList(Value).init(allocator);
-        return ValueArray{ .values = arr };
-    }
-
-    pub fn deinit(self: *ValueArray) void {
-        self.values.deinit();
-    }
-
-    // if we're out of memory, bail out
-    pub fn write(self: *ValueArray, value: Value) void {
-        common.write_or_die(Value, &self.values, value);
-    }
-
-    pub fn length(self: *ValueArray) usize {
-        return self.values.items.len;
     }
 };

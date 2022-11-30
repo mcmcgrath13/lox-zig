@@ -1,9 +1,6 @@
 const std = @import("std");
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 
-const common = @import("common.zig");
-
-const ValueArray = @import("value.zig").ValueArray;
 const Value = @import("value.zig").Value;
 
 pub const OpCode = enum(u8) {
@@ -57,36 +54,48 @@ pub const OpCode = enum(u8) {
 
 // this should maybe be ArrayList instead
 pub const Chunk = struct {
-    code: ArrayList(u8),
-    lines: ArrayList(usize),
-    constants: ValueArray,
+    code: ArrayListUnmanaged(u8) = ArrayListUnmanaged(u8){},
+    lines: ArrayListUnmanaged(usize) = ArrayListUnmanaged(usize){},
+    constants: ArrayListUnmanaged(Value) = ArrayListUnmanaged(Value){},
+
+    allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) Chunk {
         return Chunk{
-            .code = ArrayList(u8).init(allocator),
-            .lines = ArrayList(usize).init(allocator),
-            .constants = ValueArray.init(allocator),
+            .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Chunk) void {
-        self.code.deinit();
-        self.lines.deinit();
-        self.constants.deinit();
+        self.code.deinit(self.allocator);
+        self.lines.deinit(self.allocator);
+        self.constants.deinit(self.allocator);
     }
 
     // if we're out of memory, bail out
     pub fn write(self: *Chunk, byte: u8, line: usize) void {
-        common.write_or_die(u8, &self.code, byte);
-        common.write_or_die(usize, &self.lines, line);
+        self.write_or_die(u8, &self.code, byte);
+        self.write_or_die(usize, &self.lines, line);
     }
 
     pub fn add_constant(self: *Chunk, value: Value) usize {
-        self.constants.write(value);
-        return self.constants.length() - 1;
+        self.write_or_die(Value, &self.constants, value);
+        return self.constants.items.len - 1;
     }
 
     pub fn length(self: *Chunk) usize {
         return self.code.items.len;
+    }
+
+    fn write_or_die(
+        self: *Chunk,
+        comptime T: type,
+        list: *ArrayListUnmanaged(T),
+        value: T,
+    ) void {
+        list.append(self.allocator, value) catch {
+            std.log.err("Out of memory\n", .{});
+            std.process.exit(1);
+        };
     }
 };
