@@ -3,6 +3,20 @@ const std = @import("std");
 
 const lox = @import("lox.zig");
 
+// Define root.log to override the std implementation
+pub fn log(
+    comptime _: std.log.Level,
+    comptime _: @TypeOf(.EnumLiteral),
+    comptime _: []const u8,
+    _: anytype,
+) void {
+    // Print the message to stderr, silently ignoring any errors
+    // std.debug.getStderrMutex().lock();
+    // defer std.debug.getStderrMutex().unlock();
+    // const stderr = std.io.getStdErr().writer();
+    // nosuspend stderr.print(format, args) catch return;
+}
+
 export fn run(src: [*:0]const u8, src_len: usize) void {
     // TODO change this to the wee allocator?
     var gpa = std.heap.GeneralPurposeAllocator(.{
