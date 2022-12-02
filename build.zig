@@ -1,13 +1,19 @@
 const std = @import("std");
 
-pub fn build(b: *std.build.Builder) void {
+pub fn build(b: *std.build.Builder) !void {
     const target = b.standardTargetOptions(.{});
     const mode = b.standardReleaseOptions();
+    
+    const wasm_lib = b.option(bool, "wasm", "build as a library for wasm") orelse false;
 
     const value_union = b.option(bool, "value-union", "use union values instead of packed values") orelse false;
     
     const exe_options = b.addOptions();
     exe_options.addOption(bool, "value_union", value_union);
+
+    if (wasm_lib) {
+        return try build_wasm(b, exe_options);
+    }
 
     const exe = b.addExecutable("lox", "src/runner.zig");
     exe.setTarget(target);
@@ -25,17 +31,17 @@ pub fn build(b: *std.build.Builder) void {
     run_step.dependOn(&run_cmd.step);
 
 
+    
+}
+
+fn build_wasm(b: *std.build.Builder, options: *std.build.OptionsStep) !void {
     // Standard release options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
-    // const mode = b.standardReleaseOptions();
-    //
-    // const lib = b.addStaticLibrary("lox-zig", "src/main.zig");
-    // lib.setBuildMode(mode);
-    // lib.install();
-    //
-    // const main_tests = b.addTest("src/main.zig");
-    // main_tests.setBuildMode(mode);
-    //
-    // const test_step = b.step("test", "Run library tests");
-    // test_step.dependOn(&main_tests.step);
+    const mode = b.standardReleaseOptions();
+    
+    const lib = b.addStaticLibrary("lox", "src/wasm.zig");
+    lib.setTarget(try std.zig.CrossTarget.parse(.{.arch_os_abi = "wasm32-freestanding"}));
+    lib.addOptions("build_options", options);
+    lib.setBuildMode(mode);
+    lib.install();
 }
