@@ -99,6 +99,8 @@ const CallFrame = struct {
     }
 };
 
+extern "zig" fn wasm_print(msg_ptr: [*]const u8, msg_len: usize) void;
+
 pub const VM = struct {
     frames: [FRAME_MAX]CallFrame = undefined,
     frame_count: u8 = 0,
@@ -247,8 +249,7 @@ pub const VM = struct {
                 .define_global => {
                     var name = frame.read_string();
                     self.globals.put(name, self.peek(0)) catch {
-                        log.err("Out of memory!\n", .{});
-                        std.process.exit(1);
+                        @panic("Out of memory!\n");
                     };
                     _ = self.pop();
                 },
@@ -357,9 +358,19 @@ pub const VM = struct {
                     frame = self.current_frame();
                 },
                 .print => {
-                    std.io.getStdOut().writer().print("{}\n", .{self.pop()}) catch {
-                        return InterpretError.runtime;
-                    };
+                    if (@hasField(std.os.system, "fd_t")) {
+                        std.io.getStdOut().writer().print("{}\n", .{self.pop()}) catch {
+                            return InterpretError.runtime;
+                        }; 
+                    } else {
+                        // WASM
+                        var str = std.fmt.allocPrint(self.allocator, "{}\n", .{self.pop()}) catch {
+                            return InterpretError.runtime;
+                        };
+                        defer self.allocator.free(str);
+                        wasm_print(str.ptr, str.len);
+                    }
+                                       
                 },
                 .pop => {
                     _ = self.pop();
@@ -637,8 +648,7 @@ pub const VM = struct {
             self.allocator,
         )));
         self.globals.put(self.peek(1).as_obj().as_string(), self.peek(0)) catch {
-            log.err("Out of memory!\n", .{});
-            std.process.exit(1);
+            @panic("Out of memory!\n");
         };
         _ = self.pop();
         _ = self.pop();
@@ -693,5 +703,11 @@ fn greater(left: f64, right: f64) bool {
 fn clock_native(arg_count: u8, args: [*]Value) Value {
     _ = arg_count;
     _ = args;
-    return Value.number(@intToFloat(f64, std.time.timestamp()));
+    if (@hasField(std.os.system, "timespec")) {
+        return Value.number(@intToFloat(f64, std.time.timestamp()));
+    } else {
+        // TODO: what to do when there isn't an os clock?
+        return Value.number(0);
+    }
+    
 }

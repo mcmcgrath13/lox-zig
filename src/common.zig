@@ -1,32 +1,27 @@
 const std = @import("std");
 const ArrayList = std.ArrayList;
-const exit = std.process.exit;
 
 pub fn write_or_die(comptime T: type, list: *ArrayList(T), value: T) void {
     list.append(value) catch {
-        std.log.err("Out of memory\n", .{});
-        exit(1);
+        @panic("Out of memory\n");
     };
 }
 
 pub fn alloc_or_die(allocator: std.mem.Allocator, comptime T: type, len: usize) []T {
     return allocator.alloc(T, len) catch {
-        std.log.err("Out of memory\n", .{});
-        std.process.exit(1);
+        @panic("Out of memory\n");
     };
 }
 
-pub fn alloc_aligned_or_die(allocator: std.mem.Allocator, len: usize) []align(8) u8 {
-    return allocator.alignedAlloc(u8, 8, len) catch {
-        std.log.err("Out of memory\n", .{});
-        std.process.exit(1);
+pub fn alloc_aligned_or_die(allocator: std.mem.Allocator, comptime alignment: u29, len: usize) []align(alignment) u8 {
+    return allocator.alignedAlloc(u8, alignment, len) catch {
+        @panic("Out of memory\n");
     };
 }
 
 pub fn create_or_die(allocator: std.mem.Allocator, comptime T: type) *T {
     return allocator.create(T) catch {
-        std.log.err("Out of memory\n", .{});
-        std.process.exit(1);
+        @panic("Out of memory\n");
     };
 }
 

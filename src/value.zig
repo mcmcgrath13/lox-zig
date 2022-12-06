@@ -46,7 +46,7 @@ const ValuePack = struct {
     }
 
     pub fn as_obj(self: Value) *Obj {
-        return @intToPtr(*Obj, self.payload & ~(SIGN_BIT | QNAN));
+        return @intToPtr(*Obj, @truncate(usize, self.payload & ~(SIGN_BIT | QNAN)));
     }
 
     pub fn is_number(self: Value) bool {

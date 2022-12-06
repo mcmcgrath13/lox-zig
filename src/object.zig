@@ -64,7 +64,7 @@ pub const Obj = struct {
 
     fn cast(self: *Obj, comptime T: type) *T {
         var ptr = @ptrCast([*]Obj, self);
-        return @ptrCast(*T, ptr + 1);
+        return @ptrCast(*T, @alignCast(@alignOf(T), ptr + 1));
     }
 
     pub fn as_string(self: *Obj) *ObjString {
@@ -123,7 +123,7 @@ fn alloc_obj(
     objects: *?*Obj,
     allocator: std.mem.Allocator,
 ) *Obj {
-    var memory = common.alloc_aligned_or_die(allocator, @sizeOf(Obj) + @sizeOf(T));
+    var memory = common.alloc_aligned_or_die(allocator, @maximum(@alignOf(Obj), @alignOf(T)), @sizeOf(Obj) + @sizeOf(T));
     var ptr = memory.ptr;
 
     var obj_ptr = @ptrCast(*Obj, ptr);
@@ -202,8 +202,7 @@ fn get_or_put_interned_string(
         var obj = alloc_obj(ObjString, new_objstr.*, .string, objects, allocator);
         var objstr = obj.as_string();
         strings.put(objstr, {}) catch {
-            std.log.err("Out of memory\n", .{});
-            std.process.exit(1);
+            @panic("Out of memory\n");
         };
         return obj;
     }
@@ -401,8 +400,7 @@ pub const ObjClass = struct {
 
     pub fn inherit(self: *ObjClass, super: *ObjClass) void {
         var new_methods = super.methods.clone() catch {
-            std.log.err("out of memory\n", .{});
-            std.process.exit(1);
+            @panic("out of memory\n");
         };
         self.methods.deinit();
         self.methods = new_methods;
