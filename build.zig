@@ -12,7 +12,7 @@ pub fn build(b: *std.build.Builder) !void {
     exe_options.addOption(bool, "value_union", value_union);
 
     if (wasm_lib) {
-        return try build_wasm(b, exe_options);
+        return build_wasm(b, exe_options);
     }
 
     const exe = b.addExecutable("lox", "src/runner.zig");
@@ -39,7 +39,8 @@ fn build_wasm(b: *std.build.Builder, options: *std.build.OptionsStep) !void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const mode = b.standardReleaseOptions();
     
-    const lib = b.addStaticLibrary("lox", "src/wasm.zig");
+    const lib = b.addSharedLibrary("lox", "src/wasm.zig", .unversioned);
+    lib.addSystemIncludeDir("src");
     lib.setTarget(try std.zig.CrossTarget.parse(.{.arch_os_abi = "wasm32-freestanding"}));
     lib.addOptions("build_options", options);
     lib.setBuildMode(mode);

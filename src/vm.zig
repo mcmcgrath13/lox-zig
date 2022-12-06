@@ -99,7 +99,7 @@ const CallFrame = struct {
     }
 };
 
-extern fn wasm_print(msg_ptr: [*]const u8, msg_len: usize) void;
+extern "zig" fn wasm_print(msg_ptr: [*]const u8, msg_len: usize) void;
 
 pub const VM = struct {
     frames: [FRAME_MAX]CallFrame = undefined,
