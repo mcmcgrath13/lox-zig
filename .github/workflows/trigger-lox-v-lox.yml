@@ -1,0 +1,20 @@
+name: trigger lox-v-lox rebuild
+
+on:
+  push:
+    branches: ['main']
+
+jobs:
+
+  trigger_rebuild:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: rebuild
+      run: |
+        curl \
+          -XPOST \
+          -H "Authorization: Bearer ${{ secrets.LOX_V_LOX_GH_TOKEN }}"  \
+          -H "Accept: application/vnd.github+json"  \
+          https://api.github.com/repos/mcmcgrath13/lox-v-lox/actions/workflows/36915844/dispatches \
+          -d '{"ref": "main"}'
