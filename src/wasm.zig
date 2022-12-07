@@ -50,7 +50,7 @@ export fn run(src: [*:0]const u8, src_len: usize) void {
     var options = lox.Options{};
     var vm = lox.Lox.init(options, allocator);
     defer vm.deinit();
-    
+
     const code: []const u8 = src[0..src_len];
     vm.interpret(code) catch {
         wasm_print("uh oh", 5);

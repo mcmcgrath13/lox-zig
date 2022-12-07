@@ -100,6 +100,7 @@ const CallFrame = struct {
 };
 
 extern "zig" fn wasm_print(msg_ptr: [*]const u8, msg_len: usize) void;
+extern "zig" fn wasm_clock() i32;
 
 pub const VM = struct {
     frames: [FRAME_MAX]CallFrame = undefined,
@@ -361,7 +362,7 @@ pub const VM = struct {
                     if (@hasField(std.os.system, "fd_t")) {
                         std.io.getStdOut().writer().print("{}\n", .{self.pop()}) catch {
                             return InterpretError.runtime;
-                        }; 
+                        };
                     } else {
                         // WASM
                         var str = std.fmt.allocPrint(self.allocator, "{}\n", .{self.pop()}) catch {
@@ -370,7 +371,6 @@ pub const VM = struct {
                         defer self.allocator.free(str);
                         wasm_print(str.ptr, str.len);
                     }
-                                       
                 },
                 .pop => {
                     _ = self.pop();
@@ -704,10 +704,9 @@ fn clock_native(arg_count: u8, args: [*]Value) Value {
     _ = arg_count;
     _ = args;
     if (@hasField(std.os.system, "timespec")) {
-        return Value.number(@intToFloat(f64, std.time.timestamp()));
+        return Value.number(@intToFloat(f64, std.time.milliTimestamp()));
     } else {
         // TODO: what to do when there isn't an os clock?
-        return Value.number(0);
+        return Value.number(@intToFloat(f64, wasm_clock()));
     }
-    
 }
