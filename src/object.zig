@@ -104,7 +104,7 @@ pub const Obj = struct {
         writer: anytype,
     ) !void {
         switch (self.t) {
-            .string => try writer.print("\"{s}\"", .{self.as_string()}),
+            .string => try writer.print("{s}", .{self.as_string()}),
             .function => try writer.print("{}", .{self.as_function()}),
             .native => try writer.print("{}", .{self.as_native()}),
             .closure => try writer.print("{}", .{self.as_closure()}),
